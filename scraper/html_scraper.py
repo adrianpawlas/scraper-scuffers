@@ -126,21 +126,79 @@ class HTMLScraper:
                 parsed_url = urlparse(url)
                 product_data['external_id'] = parsed_url.path.strip('/').replace('/', '-')
 
-            # Extract title
-            title_elem = soup.select_one(selectors.get('title', 'h1, .product-title'))
-            if title_elem:
-                product_data['title'] = title_elem.get_text(strip=True)
+            # Extract title - try multiple selectors for product pages
+            title = None
 
-            # Extract price
-            price_elem = soup.select_one(selectors.get('price', '.price, [data-price]'))
-            if price_elem:
-                price_text = price_elem.get_text(strip=True)
-                product_data['price'] = price_text
-            else:
-                # Try to find price in script tags or other elements
-                price_text = self._find_price_in_page(soup)
-                if price_text:
-                    product_data['price'] = price_text
+            # Try specific product title selectors first
+            title_selectors = [
+                'h1.product-title',
+                '.product-title',
+                'h1',
+                '[class*="title"]',
+                '.title'
+            ]
+
+            for selector in title_selectors:
+                title_elem = soup.select_one(selector)
+                if title_elem:
+                    candidate_title = title_elem.get_text(strip=True)
+                    # Skip if it's a generic page title or collection title
+                    if candidate_title and len(candidate_title) > 3 and not any(skip in candidate_title.lower() for skip in ['all products', 'collection', 'scuffers', 'size guide']):
+                        title = candidate_title
+                        break
+
+            # Fallback: try to extract from meta tags
+            if not title:
+                meta_title = soup.find('meta', attrs={'property': 'og:title'})
+                if meta_title and meta_title.get('content'):
+                    title = meta_title.get('content').strip()
+
+            # Last fallback: extract from URL
+            if not title and 'product_url' in product_data:
+                url_parts = product_data['product_url'].split('/')
+                if 'products' in url_parts:
+                    product_index = url_parts.index('products')
+                    if product_index + 1 < len(url_parts):
+                        title = url_parts[product_index + 1].replace('-', ' ').title()
+
+            if title:
+                product_data['title'] = title
+
+            # Extract price - try multiple approaches
+            price = None
+
+            # Try direct price selectors
+            price_selectors = [
+                '.price',
+                '[data-price]',
+                '.product-price',
+                '[class*="price"]',
+                '.money'
+            ]
+
+            for selector in price_selectors:
+                price_elem = soup.select_one(selector)
+                if price_elem:
+                    price_text = price_elem.get_text(strip=True)
+                    # Look for price pattern in the text
+                    import re
+                    price_match = re.search(r'(\d+[,.]\d+)', price_text)
+                    if price_match:
+                        price = price_match.group(1)
+                        break
+
+            # Try to find price in script tags or other elements
+            if not price:
+                price = self._find_price_in_page(soup)
+
+            # Try meta tags
+            if not price:
+                meta_price = soup.find('meta', attrs={'property': 'product:price:amount'})
+                if meta_price and meta_price.get('content'):
+                    price = meta_price.get('content')
+
+            if price:
+                product_data['price'] = price
 
             # Extract image URL
             img_elem = soup.select_one(selectors.get('image_url', 'img[src*="cdn.shopify.com"]'))

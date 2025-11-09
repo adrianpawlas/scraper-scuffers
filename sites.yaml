@@ -1,6 +1,6 @@
 scuffers:
   name: Scuffers
-  source: scuffers
+  source: scraper
   mode: html
   base_url: https://scuffers.com
   categories:

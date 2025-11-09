@@ -113,16 +113,26 @@ class SigLIPEmbeddings:
 
             if valid_images:
                 try:
-                    inputs = self.processor(images=valid_images, return_tensors="pt")
+                    # For SigLIP, we need to provide both images and text inputs
+                    # Use empty text or a generic text prompt
+                    text_inputs = [""] * len(valid_images)  # Empty text for image-only embeddings
+
+                    inputs = self.processor(
+                        text=text_inputs,
+                        images=valid_images,
+                        return_tensors="pt",
+                        padding=True
+                    )
                     inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
                     with torch.no_grad():
                         outputs = self.model(**inputs)
-                        embeddings = outputs.vision_model_output.pooler_output
-                        embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
+                        # Get image embeddings from vision model
+                        image_embeddings = outputs.vision_model_output.pooler_output
+                        image_embeddings = torch.nn.functional.normalize(image_embeddings, p=2, dim=1)
 
                         # Convert to list of lists
-                        batch_embeddings = embeddings.cpu().numpy().tolist()
+                        batch_embeddings = image_embeddings.cpu().numpy().tolist()
 
                     # Map back to original positions
                     batch_results = [None] * len(batch_urls)
@@ -133,6 +143,9 @@ class SigLIPEmbeddings:
 
                 except Exception as e:
                     logger.error(f"Failed to process batch: {e}")
+                    # Log more details for debugging
+                    logger.error(f"Batch URLs: {batch_urls}")
+                    logger.error(f"Valid images count: {len(valid_images)}")
                     results.extend([None] * len(batch_urls))
             else:
                 results.extend([None] * len(batch_urls))
