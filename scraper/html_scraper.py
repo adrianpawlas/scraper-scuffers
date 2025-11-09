@@ -42,16 +42,42 @@ class HTMLScraper:
 
             soup = BeautifulSoup(response.content, 'lxml')
 
-            # Find all product containers
+            # Method 1: Try to find product containers first
             product_containers = soup.select(selectors.get('products', '.product-item'))
-
             products = []
-            for container in product_containers:
-                product_data = self._extract_product_from_listing(container, url, selectors)
-                if product_data:
-                    products.append(product_data)
 
-            logger.info(f"Found {len(products)} products on category page")
+            if product_containers:
+                logger.info(f"Found {len(product_containers)} product containers")
+                for container in product_containers:
+                    product_data = self._extract_product_from_listing(container, url, selectors)
+                    if product_data:
+                        products.append(product_data)
+            else:
+                # Method 2: If no containers found, look for product links directly
+                logger.info("No product containers found, trying direct link extraction")
+                product_links = soup.select(selectors.get('product_url', "a[href*='/products/']"))
+
+                # Filter out duplicates and gift cards
+                seen_urls = set()
+                unique_links = []
+                for link in product_links:
+                    href = link.get('href')
+                    if href and '/products/' in href:
+                        # Skip gift cards and other non-product items
+                        if any(skip in href.lower() for skip in ['giftcard', 'gift-card', 'card']):
+                            continue
+                        if href not in seen_urls:
+                            seen_urls.add(href)
+                            unique_links.append(link)
+
+                logger.info(f"Found {len(unique_links)} unique product links")
+
+                for link in unique_links[:50]:  # Limit to first 50 to avoid overwhelming
+                    product_data = self._extract_product_from_link(link, url, selectors)
+                    if product_data:
+                        products.append(product_data)
+
+            logger.info(f"Extracted {len(products)} products from category page")
             return products
 
         except Exception as e:
@@ -210,6 +236,72 @@ class HTMLScraper:
 
         except Exception as e:
             logger.error(f"Failed to extract product from listing: {e}")
+            return None
+
+    def _extract_product_from_link(self, link_elem, base_url: str, selectors: Dict[str, str]) -> Optional[Dict[str, Any]]:
+        """
+        Extract basic product info from a product link element.
+
+        Args:
+            link_elem: BeautifulSoup link element
+            base_url: Base URL for relative links
+            selectors: CSS selectors
+
+        Returns:
+            Basic product dictionary or None
+        """
+        try:
+            product_url = link_elem.get('href')
+            if not product_url:
+                return None
+
+            if product_url.startswith('/'):
+                base_parsed = urlparse(base_url)
+                product_url = f"{base_parsed.scheme}://{base_parsed.netloc}{product_url}"
+
+            product_data = {
+                'product_url': product_url,
+                'external_id': self._extract_external_id(product_url) or product_url.split('/')[-1]
+            }
+
+            # Try to extract title from link text or nearby elements
+            link_text = link_elem.get_text(strip=True)
+            if link_text and len(link_text) > 10:  # Likely a product title
+                # Clean up the text (remove size info, etc.)
+                title = link_text.split(' EUR')[0]  # Remove price part
+                title = title.split(' +')[0]  # Remove stock indicator
+                # Remove size indicators
+                import re
+                title = re.sub(r'\b(XS|S|M|L|XL|XXL|\d+)\b', '', title).strip()
+                if title:
+                    product_data['title'] = title
+
+            # Look for price in the parent container or siblings
+            parent = link_elem.parent
+            if parent:
+                # Look for price patterns in parent text
+                parent_text = parent.get_text()
+                import re
+                price_match = re.search(r'(\d+,\d+)\s*EUR', parent_text)
+                if price_match:
+                    product_data['price'] = price_match.group(1) + ' EUR'
+
+                # Look for image in parent container
+                img_elem = parent.select_one('img')
+                if img_elem:
+                    img_url = img_elem.get('src') or img_elem.get('data-src')
+                    if img_url:
+                        if img_url.startswith('//'):
+                            img_url = 'https:' + img_url
+                        elif img_url.startswith('/'):
+                            base_parsed = urlparse(base_url)
+                            img_url = f"{base_parsed.scheme}://{base_parsed.netloc}{img_url}"
+                        product_data['image_url'] = img_url
+
+            return product_data
+
+        except Exception as e:
+            logger.error(f"Failed to extract product from link: {e}")
             return None
 
     def _extract_external_id(self, url: str) -> Optional[str]:
