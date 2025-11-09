@@ -1,0 +1,30 @@
+scuffers:
+  name: Scuffers
+  source: scuffers
+  mode: html
+  base_url: https://scuffers.com
+  categories:
+    - url: https://scuffers.com/collections/all
+      name: All Products
+  selectors:
+    products: ".product-item, .grid-item"
+    product_url: "a[href*='/products/']"
+    title: "h1, .product-title, .title"
+    price: ".price, .product-price, [data-price]"
+    currency: "EUR"  # Default currency
+    image_url: "img[src*='cdn.shopify.com'], .product-image img, .image img"
+    sizes: ".size-option, .variant-option, [data-size], .size-selector option"
+    gender: ".gender, .category, .collection-title"  # Try to infer from page content
+  field_map:
+    external_id: "url"  # We'll extract from product URL
+    title: "title"
+    price: "price"
+    currency: "EUR"
+    image_url: "image_url"
+    product_url: "url"
+    size: "sizes"
+    gender: "gender"
+  merchant_name: Scuffers
+  brand: Scuffers
+  second_hand: false
+  country: eu
