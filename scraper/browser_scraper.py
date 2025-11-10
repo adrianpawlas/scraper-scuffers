@@ -129,15 +129,43 @@ class BrowserScraper:
                                 button_text = await button.text_content()
                                 button_text = button_text.strip().lower()
 
-                                if is_visible and ('load more' in button_text):
-                                    logger.info(f"Attempt {scroll_attempts}: Clicking Load More button (selector: {selector}, text: '{button_text}')")
+                                # Check if button is disabled
+                                is_disabled = await button.get_attribute('disabled')
+                                is_disabled = is_disabled is not None
+
+                                if is_visible and not is_disabled and ('load more' in button_text):
+                                    logger.info(f"Attempt {scroll_attempts}: Found clickable Load More button (selector: {selector}, text: '{button_text}', disabled: {is_disabled})")
+
+                                    # Log container count before clicking
+                                    product_selector = selectors.get('products', '.product-block__inner')
+                                    containers_before = await page.query_selector_all(product_selector)
+                                    logger.info(f"Products before click: {len(containers_before)}")
+
+                                    # Click the button
+                                    logger.info(f"Attempt {scroll_attempts}: Clicking Load More button...")
                                     await button.click()
-                                    await page.wait_for_timeout(8000)  # Wait longer for content to load
-                                    load_more_clicked = True
+
+                                    # Wait for network to be idle (AJAX requests to complete)
+                                    await page.wait_for_load_state('networkidle', timeout=15000)
+
+                                    # Additional timeout for content rendering
+                                    await page.wait_for_timeout(3000)
+
+                                    # Check if button still exists and its state
+                                    try:
+                                        still_visible = await button.is_visible()
+                                        new_text = await button.text_content()
+                                        still_disabled = await button.get_attribute('disabled')
+                                        still_disabled = still_disabled is not None
+                                        logger.info(f"Button after click - visible: {still_visible}, text: '{new_text.strip() if new_text else 'N/A'}', disabled: {still_disabled}")
+                                    except Exception as e:
+                                        logger.info(f"Button no longer exists after click: {e}")
 
                                     # Scroll again after clicking to ensure content loads
                                     await page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
-                                    await page.wait_for_timeout(3000)
+                                    await page.wait_for_timeout(2000)
+
+                                    load_more_clicked = True
                                     break
                             except Exception as e:
                                 logger.debug(f"Error clicking button with selector {selector}: {e}")
