@@ -60,19 +60,40 @@ class BrowserScraper:
             no_change_count = 0
             max_no_change = 10  # More attempts to find new products
             scroll_attempts = 0
-            max_scroll_attempts = 50  # Maximum scroll attempts
+            max_scroll_attempts = 20  # More attempts
 
             while len(products) < max_products and scroll_attempts < max_scroll_attempts:
-                # Try multiple strategies to load more products
-                await self._aggressive_scroll_and_load(page)
+                scroll_attempts += 1
 
-                # Wait for content to load
-                await page.wait_for_timeout(3000)
+                # Strategy 1: Try scrolling to load more products
+                logger.info(f"Attempt {scroll_attempts}: Scrolling to load more products...")
+                await page.evaluate("""
+                    window.scrollTo({
+                        top: document.body.scrollHeight,
+                        behavior: 'smooth'
+                    });
+                """)
+                await page.wait_for_timeout(5000)  # Wait longer for content to load
+
+                # Strategy 2: Try clicking Load More button if it exists
+                try:
+                    load_more_btn = await page.query_selector('button:has-text("Load More")')
+                    if not load_more_btn:
+                        load_more_btn = await page.query_selector('button.button:has-text("Load More")')
+
+                    if load_more_btn:
+                        is_visible = await load_more_btn.is_visible()
+                        if is_visible:
+                            logger.info(f"Attempt {scroll_attempts}: Clicking Load More button")
+                            await load_more_btn.click()
+                            await page.wait_for_timeout(5000)  # Wait for AJAX
+                except Exception as e:
+                    logger.debug(f"Error checking/clicking load more button: {e}")
 
                 # Extract current products
                 current_products = await self._extract_products_from_page(page, selectors)
 
-                logger.info(f"Found {len(current_products)} products after {scroll_attempts + 1} scroll attempts")
+                logger.info(f"Found {len(current_products)} products after {scroll_attempts} attempts")
 
                 # Check if we got new products
                 if len(current_products) > previous_count:
@@ -93,41 +114,22 @@ class BrowserScraper:
                     logger.info(f"Reached maximum product limit: {max_products}")
                     break
 
-                scroll_attempts += 1
-
-                # Special handling for sites with "Load More" buttons - try clicking again
-                if scroll_attempts % 3 == 0 and len(products) < 100:  # Every 3 attempts, if we still have few products
-                    logger.info("Trying to click load more button again...")
-                    try:
-                        # Look specifically for Scuffers-style load more button
-                        load_more_btn = await page.query_selector('button.button:has-text("Load More")')
-                        if not load_more_btn:
-                            load_more_btn = await page.query_selector('button:has-text("Load More")')
-
-                        if load_more_btn:
-                            is_visible = await load_more_btn.is_visible()
-                            if is_visible:
-                                logger.info("Clicking Load More button again")
-                                await load_more_btn.click()
-                                await page.wait_for_timeout(5000)
-                    except Exception as e:
-                        logger.debug(f"Error clicking load more button again: {e}")
-
             logger.info(f"Final result: {len(products)} products collected after {scroll_attempts} scroll attempts")
             await page.close()
             return products[:max_products]
 
     async def _aggressive_scroll_and_load(self, page: Page):
         """Aggressively scroll and try multiple strategies to load more products."""
-        # Strategy 1: Scroll to bottom multiple times
-        for i in range(3):
+        # Strategy 1: Scroll to bottom multiple times with longer waits
+        logger.info("Scrolling to bottom to trigger infinite scroll...")
+        for i in range(5):  # More scrolls
             await page.evaluate("""
                 window.scrollTo({
                     top: document.body.scrollHeight,
                     behavior: 'smooth'
                 });
             """)
-            await page.wait_for_timeout(1500)
+            await page.wait_for_timeout(3000)  # Longer wait
 
         # Strategy 2: Try clicking "Load More" buttons
         load_more_selectors = [
