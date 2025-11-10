@@ -53,36 +53,39 @@ class BrowserScraper:
             await page.goto(url, wait_until="networkidle", timeout=60000)
 
             # Wait for initial content to load
-            await page.wait_for_timeout(3000)
+            await page.wait_for_timeout(5000)
 
             products = []
             previous_count = 0
             no_change_count = 0
-            max_no_change = 5  # Stop if no new products for 5 checks
+            max_no_change = 10  # More attempts to find new products
+            scroll_attempts = 0
+            max_scroll_attempts = 50  # Maximum scroll attempts
 
-            while len(products) < max_products:
-                # Scroll to bottom to trigger infinite scroll
-                await self._scroll_to_bottom(page)
+            while len(products) < max_products and scroll_attempts < max_scroll_attempts:
+                # Try multiple strategies to load more products
+                await self._aggressive_scroll_and_load(page)
 
-                # Wait for new content to load
-                await page.wait_for_timeout(2000)
+                # Wait for content to load
+                await page.wait_for_timeout(3000)
 
                 # Extract current products
                 current_products = await self._extract_products_from_page(page, selectors)
 
-                logger.info(f"Found {len(current_products)} products so far")
+                logger.info(f"Found {len(current_products)} products after {scroll_attempts + 1} scroll attempts")
 
                 # Check if we got new products
                 if len(current_products) > previous_count:
                     products = current_products
                     previous_count = len(current_products)
                     no_change_count = 0
+                    logger.info(f"New products found! Total: {len(products)}")
                 else:
                     no_change_count += 1
                     logger.info(f"No new products found (attempt {no_change_count}/{max_no_change})")
 
                     if no_change_count >= max_no_change:
-                        logger.info("Stopping - no more products loading")
+                        logger.info("Stopping - no more products loading after multiple attempts")
                         break
 
                 # Safety check to avoid infinite loops
@@ -90,48 +93,106 @@ class BrowserScraper:
                     logger.info(f"Reached maximum product limit: {max_products}")
                     break
 
+                scroll_attempts += 1
+
+                # Special handling for sites with "Load More" buttons - try clicking again
+                if scroll_attempts % 3 == 0 and len(products) < 100:  # Every 3 attempts, if we still have few products
+                    logger.info("Trying to click load more button again...")
+                    try:
+                        # Look specifically for Scuffers-style load more button
+                        load_more_btn = await page.query_selector('button.button:has-text("Load More")')
+                        if not load_more_btn:
+                            load_more_btn = await page.query_selector('button:has-text("Load More")')
+
+                        if load_more_btn:
+                            is_visible = await load_more_btn.is_visible()
+                            if is_visible:
+                                logger.info("Clicking Load More button again")
+                                await load_more_btn.click()
+                                await page.wait_for_timeout(5000)
+                    except Exception as e:
+                        logger.debug(f"Error clicking load more button again: {e}")
+
+            logger.info(f"Final result: {len(products)} products collected after {scroll_attempts} scroll attempts")
             await page.close()
             return products[:max_products]
 
-    async def _scroll_to_bottom(self, page: Page):
-        """Scroll to the bottom of the page to trigger infinite scroll."""
-        await page.evaluate("""
-            window.scrollTo({
-                top: document.body.scrollHeight,
-                behavior: 'smooth'
-            });
-        """)
+    async def _aggressive_scroll_and_load(self, page: Page):
+        """Aggressively scroll and try multiple strategies to load more products."""
+        # Strategy 1: Scroll to bottom multiple times
+        for i in range(3):
+            await page.evaluate("""
+                window.scrollTo({
+                    top: document.body.scrollHeight,
+                    behavior: 'smooth'
+                });
+            """)
+            await page.wait_for_timeout(1500)
 
-        # Wait for scroll to complete
-        await page.wait_for_timeout(1000)
-
-        # Try clicking "Load More" buttons if they exist
+        # Strategy 2: Try clicking "Load More" buttons
         load_more_selectors = [
             'button:has-text("Load More")',
+            'button.button:has-text("Load More")',  # Specific for Scuffers
             'button:has-text("Show More")',
             'button:has-text("View More")',
             'button:has-text("Load more products")',
             'button:has-text("Show more products")',
             'button:has-text("View more products")',
+            'button:has-text("Load More Products")',
+            'button:has-text("Show More Products")',
+            'button:has-text("View More Products")',
             '.load-more',
             '.show-more',
             '.view-more',
             '[data-load-more]',
-            '[data-show-more]'
+            '[data-show-more]',
+            '[data-testid*="load-more"]',
+            '[data-testid*="show-more"]',
+            'button.button'  # Generic button class that might be the load more button
         ]
 
+        clicked_load_more = False
         for selector in load_more_selectors:
             try:
-                button = await page.query_selector(selector)
-                if button:
-                    is_visible = await button.is_visible()
-                    if is_visible:
-                        logger.info(f"Clicking load more button: {selector}")
-                        await button.click()
-                        await page.wait_for_timeout(2000)
-                        break
+                buttons = await page.query_selector_all(selector)
+                for button in buttons:
+                    try:
+                        is_visible = await button.is_visible()
+                        if is_visible:
+                            # Check if this button has the right text
+                            button_text = await button.text_content()
+                            button_text = button_text.strip().lower()
+
+                            if 'load more' in button_text or 'show more' in button_text:
+                                logger.info(f"Clicking load more button: {selector} (text: '{button_text}')")
+                                await button.click()
+                                await page.wait_for_timeout(5000)  # Wait longer for content to load
+                                # Scroll again after clicking
+                                await page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
+                                await page.wait_for_timeout(3000)
+                                clicked_load_more = True
+                                break
+                    except Exception as e:
+                        logger.debug(f"Error clicking button {selector}: {e}")
+
+                if clicked_load_more:
+                    break
             except Exception as e:
                 logger.debug(f"Error checking selector {selector}: {e}")
+
+        if not clicked_load_more:
+            logger.debug("No load more button found or clicked")
+
+        # Strategy 3: Scroll to different positions to trigger lazy loading
+        viewport_height = await page.evaluate("window.innerHeight")
+        for i in range(5):
+            scroll_position = (i + 1) * viewport_height
+            await page.evaluate(f"window.scrollTo(0, {scroll_position});")
+            await page.wait_for_timeout(1000)
+
+        # Strategy 4: Final scroll to bottom
+        await page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
+        await page.wait_for_timeout(2000)
 
     async def _extract_products_from_page(self, page: Page, selectors: Dict[str, str]) -> List[Dict[str, Any]]:
         """Extract product data from the current page state."""
