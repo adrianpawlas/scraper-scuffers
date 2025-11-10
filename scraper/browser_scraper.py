@@ -65,32 +65,56 @@ class BrowserScraper:
             while len(products) < max_products and scroll_attempts < max_scroll_attempts:
                 scroll_attempts += 1
 
-                # Strategy 1: Try scrolling to load more products
-                logger.info(f"Attempt {scroll_attempts}: Scrolling to load more products...")
-                await page.evaluate("""
-                    window.scrollTo({
-                        top: document.body.scrollHeight,
-                        behavior: 'smooth'
-                    });
-                """)
-                await page.wait_for_timeout(5000)  # Wait longer for content to load
+                # Focus on Load More button clicking since that's what works for Scuffers
+                logger.info(f"Attempt {scroll_attempts}: Looking for Load More button...")
 
-                # Strategy 2: Try clicking Load More button if it exists
-                try:
-                    load_more_btn = await page.query_selector('button:has-text("Load More")')
-                    if not load_more_btn:
-                        load_more_btn = await page.query_selector('button.button:has-text("Load More")')
+                # Scroll to bottom to ensure button is visible
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
+                await page.wait_for_timeout(2000)
 
-                    if load_more_btn:
-                        is_visible = await load_more_btn.is_visible()
-                        if is_visible:
-                            logger.info(f"Attempt {scroll_attempts}: Clicking Load More button")
-                            await load_more_btn.click()
-                            await page.wait_for_timeout(5000)  # Wait for AJAX
-                except Exception as e:
-                    logger.debug(f"Error checking/clicking load more button: {e}")
+                # Try multiple selectors for the Load More button
+                load_more_clicked = False
+                button_selectors = [
+                    'button:has-text("Load More")',
+                    'button:has-text("LOAD MORE")',
+                    'button.button:has-text("Load More")',
+                    'button.button:has-text("LOAD MORE")',
+                    'button[data-load-more]',
+                    '[class*="load-more"]',
+                    'button:contains("Load More")',
+                    'button:contains("LOAD MORE")'
+                ]
 
-                # Extract current products
+                for selector in button_selectors:
+                    try:
+                        buttons = await page.query_selector_all(selector)
+                        for button in buttons:
+                            try:
+                                is_visible = await button.is_visible()
+                                button_text = await button.text_content()
+                                button_text = button_text.strip().lower()
+
+                                if is_visible and ('load more' in button_text):
+                                    logger.info(f"Attempt {scroll_attempts}: Clicking Load More button (selector: {selector}, text: '{button_text}')")
+                                    await button.click()
+                                    await page.wait_for_timeout(8000)  # Wait longer for content to load
+                                    load_more_clicked = True
+
+                                    # Scroll again after clicking to ensure content loads
+                                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
+                                    await page.wait_for_timeout(3000)
+                                    break
+                            except Exception as e:
+                                logger.debug(f"Error clicking button with selector {selector}: {e}")
+                        if load_more_clicked:
+                            break
+                    except Exception as e:
+                        logger.debug(f"Error with selector {selector}: {e}")
+
+                if not load_more_clicked:
+                    logger.info(f"Attempt {scroll_attempts}: No Load More button found or clickable")
+
+                # Extract current products after potential button click
                 current_products = await self._extract_products_from_page(page, selectors)
 
                 logger.info(f"Found {len(current_products)} products after {scroll_attempts} attempts")
@@ -118,83 +142,6 @@ class BrowserScraper:
             await page.close()
             return products[:max_products]
 
-    async def _aggressive_scroll_and_load(self, page: Page):
-        """Aggressively scroll and try multiple strategies to load more products."""
-        # Strategy 1: Scroll to bottom multiple times with longer waits
-        logger.info("Scrolling to bottom to trigger infinite scroll...")
-        for i in range(5):  # More scrolls
-            await page.evaluate("""
-                window.scrollTo({
-                    top: document.body.scrollHeight,
-                    behavior: 'smooth'
-                });
-            """)
-            await page.wait_for_timeout(3000)  # Longer wait
-
-        # Strategy 2: Try clicking "Load More" buttons
-        load_more_selectors = [
-            'button:has-text("Load More")',
-            'button.button:has-text("Load More")',  # Specific for Scuffers
-            'button:has-text("Show More")',
-            'button:has-text("View More")',
-            'button:has-text("Load more products")',
-            'button:has-text("Show more products")',
-            'button:has-text("View more products")',
-            'button:has-text("Load More Products")',
-            'button:has-text("Show More Products")',
-            'button:has-text("View More Products")',
-            '.load-more',
-            '.show-more',
-            '.view-more',
-            '[data-load-more]',
-            '[data-show-more]',
-            '[data-testid*="load-more"]',
-            '[data-testid*="show-more"]',
-            'button.button'  # Generic button class that might be the load more button
-        ]
-
-        clicked_load_more = False
-        for selector in load_more_selectors:
-            try:
-                buttons = await page.query_selector_all(selector)
-                for button in buttons:
-                    try:
-                        is_visible = await button.is_visible()
-                        if is_visible:
-                            # Check if this button has the right text
-                            button_text = await button.text_content()
-                            button_text = button_text.strip().lower()
-
-                            if 'load more' in button_text or 'show more' in button_text:
-                                logger.info(f"Clicking load more button: {selector} (text: '{button_text}')")
-                                await button.click()
-                                await page.wait_for_timeout(5000)  # Wait longer for content to load
-                                # Scroll again after clicking
-                                await page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
-                                await page.wait_for_timeout(3000)
-                                clicked_load_more = True
-                                break
-                    except Exception as e:
-                        logger.debug(f"Error clicking button {selector}: {e}")
-
-                if clicked_load_more:
-                    break
-            except Exception as e:
-                logger.debug(f"Error checking selector {selector}: {e}")
-
-        if not clicked_load_more:
-            logger.debug("No load more button found or clicked")
-
-        # Strategy 3: Scroll to different positions to trigger lazy loading
-        viewport_height = await page.evaluate("window.innerHeight")
-        for i in range(5):
-            scroll_position = (i + 1) * viewport_height
-            await page.evaluate(f"window.scrollTo(0, {scroll_position});")
-            await page.wait_for_timeout(1000)
-
-        # Strategy 4: Final scroll to bottom
-        await page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
-        await page.wait_for_timeout(2000)
 
     async def _extract_products_from_page(self, page: Page, selectors: Dict[str, str]) -> List[Dict[str, Any]]:
         """Extract product data from the current page state."""
