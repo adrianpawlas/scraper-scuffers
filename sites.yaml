@@ -7,12 +7,12 @@ scuffers:
     - url: https://scuffers.com/collections/all
       name: All Products
   selectors:
-    products: "[class*='product'], .product, .item, [class*='item']"
-    product_url: "a[href*='/products/'][href*='/products/']:not([href*='giftcard']):not([href*='gift-card'])"
+    products: ".product-block__inner"
+    product_url: "a[href*='/products/']:not([href*='giftcard']):not([href*='gift-card'])"
     title: "h1, .product-title, .title, [class*='title']"
     price: ".price, .product-price, [data-price], [class*='price']"
     currency: "EUR"  # Default currency
-    image_url: "img, .image img, [class*='image'] img"
+    image_url: "img[src*='cdn'], img[src^='//']"
     sizes: ".size-option, .variant-option, [data-size], .size-selector option, [class*='size']"
     gender: ".gender, .category, .collection-title, h1, .collection-title"  # Try to infer from page content
   field_map:

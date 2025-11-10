@@ -229,18 +229,43 @@ class HTMLScraper:
             if price:
                 product_data['price'] = price
 
-            # Extract image URL
-            img_elem = soup.select_one(selectors.get('image_url', 'img[src*="cdn.shopify.com"]'))
-            if img_elem:
-                img_url = img_elem.get('src')
-                if img_url:
-                    # Convert relative URLs to absolute
-                    if img_url.startswith('//'):
-                        img_url = 'https:' + img_url
-                    elif img_url.startswith('/'):
-                        base_url = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
-                        img_url = urljoin(base_url, img_url)
-                    product_data['image_url'] = img_url
+            # Extract image URL - prioritize actual product images over placeholders
+            img_url = None
+
+            # First try to find CDN images that are likely product photos
+            cdn_images = soup.select('img[src*="cdn"], img[src^="//"]')
+            for img in cdn_images:
+                src = img.get('src', '')
+                alt = img.get('alt', '').lower()
+                classes = ' '.join(img.get('class', [])).lower()
+
+                # Skip logos, icons, and placeholder images
+                if any(skip in src.lower() for skip in ['logo', 'icon', 'social', 'flag', 'placeholder']):
+                    continue
+                if any(skip in alt for skip in ['logo', 'icon', 'flag', 'scuffers']):
+                    continue
+                if 'logo' in classes or 'icon' in classes:
+                    continue
+
+                # Look for images that are likely product photos (contain product name or have reasonable size)
+                if any(keyword in src.lower() for keyword in ['jpg', 'jpeg', 'png']) and len(src) > 50:
+                    img_url = src
+                    break
+
+            # Fallback to the selector if we didn't find a good image
+            if not img_url:
+                img_elem = soup.select_one(selectors.get('image_url', 'img[src*="cdn.shopify.com"]'))
+                if img_elem:
+                    img_url = img_elem.get('src')
+
+            if img_url:
+                # Convert relative URLs to absolute
+                if img_url.startswith('//'):
+                    img_url = 'https:' + img_url
+                elif img_url.startswith('/'):
+                    base_url = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
+                    img_url = urljoin(base_url, img_url)
+                product_data['image_url'] = img_url
 
             # Extract sizes
             size_elements = soup.select(selectors.get('sizes', '.size-option, [data-size]'))
@@ -462,7 +487,25 @@ class HTMLScraper:
         elif 'men' in url_lower or 'man' in url_lower or 'male' in url_lower:
             return 'men'
 
-        # Check page title or breadcrumbs
+        # Check meta description for gender indicators (e.g., "Model (man) wearing...")
+        meta_desc = soup.select_one('meta[name="description"]')
+        if meta_desc:
+            desc_content = meta_desc.get('content', '').lower()
+            if '(man)' in desc_content or '(male)' in desc_content or 'man wearing' in desc_content:
+                return 'men'
+            elif '(woman)' in desc_content or '(female)' in desc_content or 'woman wearing' in desc_content:
+                return 'women'
+
+        # Check breadcrumbs for gender context
+        breadcrumbs = soup.select('.breadcrumb, .breadcrumbs, [class*="breadcrumb"]')
+        for crumb in breadcrumbs:
+            crumb_text = crumb.get_text().lower()
+            if 'women' in crumb_text or 'woman' in crumb_text or 'female' in crumb_text:
+                return 'women'
+            elif 'men' in crumb_text or 'man' in crumb_text or 'male' in crumb_text:
+                return 'men'
+
+        # Check page title
         title_elem = soup.select_one('title')
         if title_elem:
             title_text = title_elem.get_text().lower()
@@ -479,6 +522,16 @@ class HTMLScraper:
                 return 'women'
             elif 'men' in gender_text or 'man' in gender_text:
                 return 'men'
+
+        # Check product description for gender indicators
+        desc_elem = soup.select_one('.product-description, .description, [class*="description"]')
+        if desc_elem:
+            desc_text = desc_elem.get_text().lower()
+            if any(term in desc_text for term in ['men\'s', 'man\'s', 'male', 'unisex']):
+                if 'unisex' in desc_text:
+                    return None  # Could be either
+                elif any(term in desc_text for term in ['men\'s', 'man\'s', 'male']):
+                    return 'men'
 
         # Default to None - will be determined by collection context
         return None
