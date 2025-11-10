@@ -24,7 +24,7 @@ class FashionScraper:
     def __init__(self, config_path: str = 'sites.yaml'):
         self.config = self._load_config(config_path)
         self.user_agent = os.getenv('USER_AGENT', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
-        self.html_scraper = HTMLScraper(user_agent=self.user_agent, delay=1.0)
+        self.html_scraper = HTMLScraper(user_agent=self.user_agent, delay=2.0)
 
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Load scraper configuration from YAML file."""
@@ -77,35 +77,64 @@ class FashionScraper:
                 for listing in listings:
                     product_url = listing.get('product_url')
                     if product_url:
-                        product_data = self.html_scraper.scrape_product_page(
-                            product_url,
-                            site_config.get('selectors', {}),
-                            site_config
-                        )
+                        logger.debug(f"Scraping product page: {product_url}")
+
+                        # Try to scrape individual product page with retry logic
+                        product_data = None
+                        max_retries = 3
+                        for attempt in range(max_retries):
+                            try:
+                                product_data = self.html_scraper.scrape_product_page(
+                                    product_url,
+                                    site_config.get('selectors', {}),
+                                    site_config
+                                )
+                                if product_data:
+                                    break
+                            except Exception as e:
+                                logger.warning(f"Attempt {attempt + 1} failed for {product_url}: {e}")
+                                if attempt < max_retries - 1:
+                                    import time
+                                    time.sleep(2 * (attempt + 1))  # Exponential backoff
 
                         if product_data:
                             # Merge listing data with detailed product data
-                            product_data.update(listing)
+                            # Use listing data as base, then update with detailed data
+                            merged_product = dict(listing)  # Start with listing data
+                            merged_product.update(product_data)  # Override with detailed data
 
                             # Generate embedding if image URL is available
-                            image_url = product_data.get('image_url')
+                            image_url = merged_product.get('image_url')
                             if image_url:
                                 logger.debug(f"Generating embedding for {product_url}")
                                 try:
                                     embedding = get_batch_embeddings([image_url])[0]
                                     if embedding:
-                                        product_data['embedding'] = embedding
+                                        merged_product['embedding'] = embedding
                                         logger.debug(f"Generated embedding with {len(embedding)} dimensions")
                                     else:
                                         logger.warning(f"Failed to generate embedding for {product_url}")
                                 except Exception as e:
                                     logger.error(f"Error generating embedding for {product_url}: {e}")
 
-                            products.append(product_data)
+                            products.append(merged_product)
+                        else:
+                            # If detailed scraping failed, still include the basic listing data
+                            logger.warning(f"Detailed scraping failed for {product_url}, using basic listing data")
+                            basic_product = dict(listing)
+                            basic_product.update({
+                                'source': site_config.get('source'),
+                                'merchant_name': site_config.get('merchant_name'),
+                                'brand': site_config.get('brand'),
+                                'second_hand': site_config.get('second_hand', False),
+                                'country': site_config.get('country', 'eu'),
+                                'currency': site_config.get('currency', 'EUR'),
+                            })
+                            products.append(basic_product)
 
-                            # Log progress
-                            if len(products) % 10 == 0:
-                                logger.info(f"Processed {len(products)} products so far")
+                        # Log progress
+                        if len(products) % 10 == 0:
+                            logger.info(f"Processed {len(products)} products so far")
 
             if not products:
                 logger.warning(f"No products found for {site_name}")

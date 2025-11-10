@@ -96,14 +96,27 @@ class HTMLScraper:
         Returns:
             Complete product dictionary or None if failed
         """
-        logger.info(f"Scraping product page: {url}")
+        logger.debug(f"Scraping product page: {url}")
 
         try:
             # Respect delay between requests
             time.sleep(self.delay)
 
-            response = self.session.get(url, timeout=10)
-            response.raise_for_status()
+            # Try with retry logic
+            max_retries = 3
+            response = None
+            for attempt in range(max_retries):
+                try:
+                    response = self.session.get(url, timeout=15)  # Increased timeout
+                    response.raise_for_status()
+                    break
+                except Exception as e:
+                    logger.warning(f"Attempt {attempt + 1} failed for {url}: {e}")
+                    if attempt < max_retries - 1:
+                        time.sleep(2 * (attempt + 1))  # Exponential backoff
+                    else:
+                        logger.error(f"All attempts failed for {url}")
+                        return None
 
             soup = BeautifulSoup(response.content, 'lxml')
 
