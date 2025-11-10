@@ -74,6 +74,8 @@ class BrowserScraper:
                 # Try multiple selectors for the Load More button
                 button_clicked = False
                 button_selectors = [
+                    '#load-more',  # Specific ID from HTML
+                    'button[data-next-url]',  # Button with pagination data
                     'button:has-text("Load More")',
                     'button:has-text("LOAD MORE")',
                     'button.button:has-text("Load More")',
@@ -121,8 +123,9 @@ class BrowserScraper:
                                     is_visible = await button.is_visible()
                                     is_disabled = await button.get_attribute('disabled')
                                     is_disabled = is_disabled is not None
+                                    next_url = await button.get_attribute('data-next-url')
 
-                                    logger.info(f"Found potential button: '{text}' (visible: {is_visible}, disabled: {is_disabled})")
+                                    logger.info(f"Found potential button: '{text}' (visible: {is_visible}, disabled: {is_disabled}, next-url: {next_url})")
 
                                     if is_visible and not is_disabled:
                                         logger.info(f"Attempt {load_attempts}: Clicking Load More button...")
