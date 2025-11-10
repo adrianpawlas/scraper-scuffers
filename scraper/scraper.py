@@ -11,10 +11,12 @@ import os
 
 try:
     from .html_scraper import HTMLScraper
+    from .browser_scraper import BrowserScraper
     from .embeddings import get_batch_embeddings
     from .database import upsert_products
 except ImportError:
     from html_scraper import HTMLScraper
+    from browser_scraper import BrowserScraper
     from embeddings import get_batch_embeddings
     from database import upsert_products
 
@@ -25,6 +27,7 @@ class FashionScraper:
         self.config = self._load_config(config_path)
         self.user_agent = os.getenv('USER_AGENT', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
         self.html_scraper = HTMLScraper(user_agent=self.user_agent, delay=2.0)
+        self.browser_scraper = None  # Will be initialized when needed
 
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Load scraper configuration from YAML file."""
@@ -38,6 +41,31 @@ class FashionScraper:
     def scrape_site(self, site_name: str, sync: bool = True, limit: Optional[int] = None) -> bool:
         """
         Scrape a specific site.
+
+        Args:
+            site_name: Name of the site to scrape (key in config)
+            sync: Whether to sync to database
+            limit: Maximum number of products to scrape (for testing)
+
+        Returns:
+            True if successful
+        """
+        # Run the async version in a new event loop
+        import asyncio
+        try:
+            return asyncio.run(self.scrape_site_async(site_name, sync, limit))
+        except RuntimeError:
+            # If already in an event loop, create a new one
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(self.scrape_site_async(site_name, sync, limit))
+            finally:
+                loop.close()
+
+    async def scrape_site_async(self, site_name: str, sync: bool = True, limit: Optional[int] = None) -> bool:
+        """
+        Async version of scrape_site for browser scraping.
 
         Args:
             site_name: Name of the site to scrape (key in config)
@@ -65,10 +93,17 @@ class FashionScraper:
                 logger.info(f"Scraping category: {category_name}")
 
                 # Get product listings from category page
-                listings = self.html_scraper.scrape_category_page(
-                    category_url,
-                    site_config.get('selectors', {})
-                )
+                mode = site_config.get('mode', 'html')
+                if mode == 'browser':
+                    # Use browser scraper for dynamic content
+                    logger.info("Using browser scraper for dynamic content loading")
+                    listings = await self._scrape_with_browser(category_url, site_config)
+                else:
+                    # Use HTML scraper for static content
+                    listings = self.html_scraper.scrape_category_page(
+                        category_url,
+                        site_config.get('selectors', {})
+                    )
 
                 if limit:
                     listings = listings[:limit]
@@ -157,6 +192,30 @@ class FashionScraper:
         except Exception as e:
             logger.error(f"Failed to scrape site {site_name}: {e}")
             return False
+
+    async def _scrape_with_browser(self, url: str, site_config: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Scrape products using browser automation for dynamic content.
+
+        Args:
+            url: Category URL to scrape
+            site_config: Site configuration
+
+        Returns:
+            List of product listings
+        """
+        if not self.browser_scraper:
+            self.browser_scraper = BrowserScraper(user_agent=self.user_agent)
+
+        max_products = 1500  # Higher limit for browser scraping
+        products = await self.browser_scraper.scrape_all_products(
+            url,
+            site_config.get('selectors', {}),
+            max_products=max_products
+        )
+
+        logger.info(f"Browser scraper found {len(products)} products")
+        return products
 
     def scrape_all_sites(self, sync: bool = True, limit: Optional[int] = None) -> bool:
         """

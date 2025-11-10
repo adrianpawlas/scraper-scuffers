@@ -1,7 +1,7 @@
 scuffers:
   name: Scuffers
   source: scraper
-  mode: html
+  mode: browser
   base_url: https://scuffers.com
   categories:
     - url: https://scuffers.com/collections/all
