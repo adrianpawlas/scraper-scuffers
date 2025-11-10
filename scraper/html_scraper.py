@@ -180,6 +180,13 @@ class HTMLScraper:
                 price_elem = soup.select_one(selector)
                 if price_elem:
                     price_text = price_elem.get_text(strip=True)
+                    # Skip if this looks like filter/navigation text
+                    if any(skip_word in price_text.lower() for skip_word in [
+                        'price', 'low to high', 'high to low', 'filter', 'sort',
+                        'new arrivals', 'best sellers', 'on sale'
+                    ]):
+                        continue
+
                     # Look for price pattern in the text
                     import re
                     price_match = re.search(r'(\d+[,.]\d+)', price_text)
@@ -196,6 +203,28 @@ class HTMLScraper:
                 meta_price = soup.find('meta', attrs={'property': 'product:price:amount'})
                 if meta_price and meta_price.get('content'):
                     price = meta_price.get('content')
+
+            # Try JSON-LD structured data
+            if not price:
+                json_ld_scripts = soup.find_all('script', type='application/ld+json')
+                for script in json_ld_scripts:
+                    try:
+                        import json
+                        data = json.loads(script.string)
+                        if isinstance(data, dict) and 'offers' in data:
+                            offers = data['offers']
+                            if isinstance(offers, list) and offers:
+                                offer = offers[0]
+                            elif isinstance(offers, dict):
+                                offer = offers
+                            else:
+                                continue
+
+                            if 'price' in offer:
+                                price = str(offer['price'])
+                                break
+                    except (json.JSONDecodeError, KeyError):
+                        continue
 
             if price:
                 product_data['price'] = price

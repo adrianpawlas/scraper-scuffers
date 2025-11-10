@@ -38,22 +38,40 @@ class SupabaseDB:
         try:
             # Convert products to the expected format
             formatted_products = []
+            seen_keys = set()  # Track unique source+external_id combinations
+
             for product in products:
                 formatted_product = self._format_product_for_db(product)
                 if formatted_product:
-                    formatted_products.append(formatted_product)
+                    # Create unique key for deduplication
+                    unique_key = (formatted_product.get('source'), formatted_product.get('external_id'))
+                    if unique_key not in seen_keys:
+                        seen_keys.add(unique_key)
+                        formatted_products.append(formatted_product)
+                    else:
+                        logger.debug(f"Skipping duplicate product: {unique_key}")
 
             if not formatted_products:
                 logger.warning("No valid products to upsert after formatting")
                 return False
 
-            # Perform upsert
-            result = self.client.table('products').upsert(
-                formatted_products,
-                on_conflict='source,external_id'
-            ).execute()
+            logger.info(f"Upserting {len(formatted_products)} unique products (removed {len(products) - len(formatted_products)} duplicates)")
 
-            logger.info(f"Successfully upserted {len(formatted_products)} products")
+            # Perform upsert in batches to avoid PostgreSQL constraint issues
+            batch_size = 50
+            for i in range(0, len(formatted_products), batch_size):
+                batch = formatted_products[i:i + batch_size]
+                try:
+                    result = self.client.table('products').upsert(
+                        batch,
+                        on_conflict='source,external_id'
+                    ).execute()
+                except Exception as batch_error:
+                    logger.error(f"Failed to upsert batch {i//batch_size + 1}: {batch_error}")
+                    # Continue with other batches
+                    continue
+
+            logger.info(f"Successfully upserted products in batches")
             return True
 
         except Exception as e:
