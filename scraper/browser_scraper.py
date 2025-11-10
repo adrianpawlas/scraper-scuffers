@@ -85,6 +85,41 @@ class BrowserScraper:
                     'button:contains("LOAD MORE")'
                 ]
 
+                # First, log ALL buttons on the page to debug
+                all_buttons = await page.query_selector_all('button')
+                logger.info(f"Found {len(all_buttons)} total buttons on page")
+
+                for i, btn in enumerate(all_buttons):
+                    try:
+                        text = await btn.text_content()
+                        visible = await btn.is_visible()
+                        if text.strip():
+                            logger.info(f"  Button {i+1}: '{text.strip()}' (visible: {visible})")
+                    except Exception as e:
+                        logger.debug(f"Error checking button {i}: {e}")
+
+                # Also check for any clickable elements with "load" or "more" in text
+                clickable_elements = await page.query_selector_all('button, a, [role="button"], div[onclick], span[onclick]')
+                load_more_candidates = []
+
+                for elem in clickable_elements:
+                    try:
+                        text = await elem.text_content()
+                        if text and ('load' in text.lower() or 'more' in text.lower()):
+                            load_more_candidates.append(elem)
+                    except:
+                        pass
+
+                logger.info(f"Found {len(load_more_candidates)} elements with 'load' or 'more' in text:")
+                for i, elem in enumerate(load_more_candidates):
+                    try:
+                        tag = await elem.evaluate("el => el.tagName")
+                        text = await elem.text_content()
+                        visible = await elem.is_visible()
+                        logger.info(f"  Candidate {i+1}: <{tag}> '{text.strip()}' (visible: {visible})")
+                    except Exception as e:
+                        logger.debug(f"Error checking candidate {i}: {e}")
+
                 for selector in button_selectors:
                     try:
                         buttons = await page.query_selector_all(selector)
