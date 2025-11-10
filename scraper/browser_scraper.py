@@ -78,30 +78,38 @@ class BrowserScraper:
                     'button[data-next-url]',  # Button with pagination data
                     'button:has-text("Load More")',
                     'button:has-text("LOAD MORE")',
+                    'button:has-text("Show more")',
+                    'button:has-text("SHOW MORE")',
                     'button.button:has-text("Load More")',
                     'button.button:has-text("LOAD MORE")',
+                    'button.button:has-text("Show more")',
+                    'button.button:has-text("SHOW MORE")',
                     'button[data-load-more]',
                     '[class*="load-more"]',
                     'button:contains("Load More")',
                     'button:contains("LOAD MORE")',
+                    'button:contains("Show more")',
+                    'button:contains("SHOW MORE")',
                     'button',
                     'a:has-text("Load More")',
-                    'a:has-text("LOAD MORE")'
+                    'a:has-text("LOAD MORE")',
+                    'a:has-text("Show more")',
+                    'a:has-text("SHOW MORE")'
                 ]
 
-                # Log all clickable elements containing "load" or "more"
+                # Log all clickable elements containing "load", "more", or "show"
                 clickable_elements = await page.query_selector_all('button, a, [role="button"], div[onclick], span[onclick]')
                 load_more_candidates = []
 
                 for elem in clickable_elements:
                     try:
                         text = await elem.text_content()
-                        if text and ('load' in text.lower() or 'more' in text.lower()):
+                        if text and any(keyword in text.lower() for keyword in ['load', 'more', 'show']):
                             load_more_candidates.append(elem)
                     except:
                         pass
 
-                logger.info(f"Found {len(load_more_candidates)} elements with 'load' or 'more' in text:")
+                logger.info(f"Found {len(load_more_candidates)} elements with 'load', 'more', or 'show' in text:")
                 for i, elem in enumerate(load_more_candidates):
                     try:
                         tag = await elem.evaluate("el => el.tagName")
@@ -119,7 +127,15 @@ class BrowserScraper:
                                 text = await button.text_content()
                                 text = text.strip().lower() if text else ""
 
-                                if 'load more' in text:
+                                if 'load more' in text or 'show more' in text:
+                                    # First, try to scroll the button into view
+                                    try:
+                                        await button.scroll_into_view_if_needed()
+                                        await page.wait_for_timeout(1000)  # Wait for scroll to complete
+                                        logger.info("Scrolled button into view")
+                                    except Exception as e:
+                                        logger.warning(f"Failed to scroll button into view: {e}")
+
                                     is_visible = await button.is_visible()
                                     is_disabled = await button.get_attribute('disabled')
                                     is_disabled = is_disabled is not None
@@ -127,45 +143,50 @@ class BrowserScraper:
 
                                     logger.info(f"Found potential button: '{text}' (visible: {is_visible}, disabled: {is_disabled}, next-url: {next_url})")
 
-                                    if is_visible and not is_disabled:
-                                        logger.info(f"Attempt {load_attempts}: Clicking Load More button...")
+                                    # Try clicking even if not visible initially
+                                    if not is_disabled:
+                                        logger.info(f"Attempt {load_attempts}: Clicking {text} button...")
 
                                         # Try multiple click methods
+                                        click_success = False
                                         try:
                                             # Method 1: Direct click
                                             await button.click()
                                             logger.info("Used direct click")
+                                            click_success = True
                                         except Exception as e:
                                             logger.warning(f"Direct click failed: {e}")
                                             try:
                                                 # Method 2: JavaScript click
                                                 await button.evaluate("el => el.click()")
                                                 logger.info("Used JavaScript click")
+                                                click_success = True
                                             except Exception as e2:
                                                 logger.warning(f"JavaScript click failed: {e2}")
                                                 try:
                                                     # Method 3: Dispatch click event
                                                     await button.dispatch_event('click')
                                                     logger.info("Used dispatch click event")
+                                                    click_success = True
                                                 except Exception as e3:
                                                     logger.error(f"All click methods failed: {e3}")
-                                                    continue
 
-                                        # Wait for network activity to settle
-                                        await page.wait_for_load_state('networkidle', timeout=15000)
+                                        if click_success:
+                                            # Wait for network activity to settle
+                                            await page.wait_for_load_state('networkidle', timeout=15000)
 
-                                        # Additional wait for content to load
-                                        await page.wait_for_timeout(5000)
+                                            # Additional wait for content to load
+                                            await page.wait_for_timeout(5000)
 
-                                        # Check if button is still visible (might disappear after loading all)
-                                        try:
-                                            still_visible = await button.is_visible()
-                                            logger.info(f"Button still visible after click: {still_visible}")
-                                        except:
-                                            logger.info("Button no longer exists after click")
+                                            # Check if button is still visible (might disappear after loading all)
+                                            try:
+                                                still_visible = await button.is_visible()
+                                                logger.info(f"Button still visible after click: {still_visible}")
+                                            except:
+                                                logger.info("Button no longer exists after click")
 
-                                        button_clicked = True
-                                        break
+                                            button_clicked = True
+                                            break
                             except Exception as e:
                                 logger.debug(f"Error processing button: {e}")
                         if button_clicked:
