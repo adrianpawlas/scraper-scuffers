@@ -58,129 +58,33 @@ class BrowserScraper:
             products = []
             previous_count = 0
             no_change_count = 0
-            max_no_change = 10  # More attempts to find new products
+            max_no_change = 5  # Attempts to find new products
             scroll_attempts = 0
-            max_scroll_attempts = 20  # More attempts
+            max_scroll_attempts = 20  # Maximum scrolls
 
             while len(products) < max_products and scroll_attempts < max_scroll_attempts:
                 scroll_attempts += 1
 
-                # Focus on Load More button clicking since that's what works for Scuffers
-                logger.info(f"Attempt {scroll_attempts}: Looking for Load More button...")
+                logger.info(f"Attempt {scroll_attempts}: Scrolling to load more products...")
 
-                # Scroll to bottom to ensure button is visible
+                # Get current scroll height
+                current_height = await page.evaluate("document.body.scrollHeight")
+                logger.info(f"Current scroll height: {current_height}")
+
+                # Scroll to bottom
                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
-                await page.wait_for_timeout(2000)
+                await page.wait_for_timeout(3000)  # Wait for potential load
 
-                # Try multiple selectors for the Load More button
-                load_more_clicked = False
-                button_selectors = [
-                    'button:has-text("Load More")',
-                    'button:has-text("LOAD MORE")',
-                    'button.button:has-text("Load More")',
-                    'button.button:has-text("LOAD MORE")',
-                    'button[data-load-more]',
-                    '[class*="load-more"]',
-                    'button:contains("Load More")',
-                    'button:contains("LOAD MORE")'
-                ]
+                # Check if page height increased (indicating new content loaded)
+                new_height = await page.evaluate("document.body.scrollHeight")
+                logger.info(f"New scroll height: {new_height}")
 
-                # First, log ALL buttons on the page to debug
-                all_buttons = await page.query_selector_all('button')
-                logger.info(f"Found {len(all_buttons)} total buttons on page")
+                height_increased = new_height > current_height
+                logger.info(f"Height increased: {height_increased}")
 
-                for i, btn in enumerate(all_buttons):
-                    try:
-                        text = await btn.text_content()
-                        visible = await btn.is_visible()
-                        if text.strip():
-                            logger.info(f"  Button {i+1}: '{text.strip()}' (visible: {visible})")
-                    except Exception as e:
-                        logger.debug(f"Error checking button {i}: {e}")
-
-                # Also check for any clickable elements with "load" or "more" in text
-                clickable_elements = await page.query_selector_all('button, a, [role="button"], div[onclick], span[onclick]')
-                load_more_candidates = []
-
-                for elem in clickable_elements:
-                    try:
-                        text = await elem.text_content()
-                        if text and ('load' in text.lower() or 'more' in text.lower()):
-                            load_more_candidates.append(elem)
-                    except:
-                        pass
-
-                logger.info(f"Found {len(load_more_candidates)} elements with 'load' or 'more' in text:")
-                for i, elem in enumerate(load_more_candidates):
-                    try:
-                        tag = await elem.evaluate("el => el.tagName")
-                        text = await elem.text_content()
-                        visible = await elem.is_visible()
-                        logger.info(f"  Candidate {i+1}: <{tag}> '{text.strip()}' (visible: {visible})")
-                    except Exception as e:
-                        logger.debug(f"Error checking candidate {i}: {e}")
-
-                for selector in button_selectors:
-                    try:
-                        buttons = await page.query_selector_all(selector)
-                        for button in buttons:
-                            try:
-                                is_visible = await button.is_visible()
-                                button_text = await button.text_content()
-                                button_text = button_text.strip().lower()
-
-                                # Check if button is disabled
-                                is_disabled = await button.get_attribute('disabled')
-                                is_disabled = is_disabled is not None
-
-                                if is_visible and not is_disabled and ('load more' in button_text):
-                                    logger.info(f"Attempt {scroll_attempts}: Found clickable Load More button (selector: {selector}, text: '{button_text}', disabled: {is_disabled})")
-
-                                    # Log container count before clicking
-                                    product_selector = selectors.get('products', '.product-block__inner')
-                                    containers_before = await page.query_selector_all(product_selector)
-                                    logger.info(f"Products before click: {len(containers_before)}")
-
-                                    # Click the button
-                                    logger.info(f"Attempt {scroll_attempts}: Clicking Load More button...")
-                                    await button.click()
-
-                                    # Wait for network to be idle (AJAX requests to complete)
-                                    await page.wait_for_load_state('networkidle', timeout=15000)
-
-                                    # Additional timeout for content rendering
-                                    await page.wait_for_timeout(3000)
-
-                                    # Check if button still exists and its state
-                                    try:
-                                        still_visible = await button.is_visible()
-                                        new_text = await button.text_content()
-                                        still_disabled = await button.get_attribute('disabled')
-                                        still_disabled = still_disabled is not None
-                                        logger.info(f"Button after click - visible: {still_visible}, text: '{new_text.strip() if new_text else 'N/A'}', disabled: {still_disabled}")
-                                    except Exception as e:
-                                        logger.info(f"Button no longer exists after click: {e}")
-
-                                    # Scroll again after clicking to ensure content loads
-                                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
-                                    await page.wait_for_timeout(2000)
-
-                                    load_more_clicked = True
-                                    break
-                            except Exception as e:
-                                logger.debug(f"Error clicking button with selector {selector}: {e}")
-                        if load_more_clicked:
-                            break
-                    except Exception as e:
-                        logger.debug(f"Error with selector {selector}: {e}")
-
-                if not load_more_clicked:
-                    logger.info(f"Attempt {scroll_attempts}: No Load More button found or clickable")
-
-                # Extract current products after potential button click
+                # Extract current products after scroll
                 current_products = await self._extract_products_from_page(page, selectors)
-
-                logger.info(f"Found {len(current_products)} products after {scroll_attempts} attempts")
+                logger.info(f"Found {len(current_products)} products after scroll {scroll_attempts}")
 
                 # Check if we got new products
                 if len(current_products) > previous_count:
@@ -193,7 +97,7 @@ class BrowserScraper:
                     logger.info(f"No new products found (attempt {no_change_count}/{max_no_change})")
 
                     if no_change_count >= max_no_change:
-                        logger.info("Stopping - no more products loading after multiple attempts")
+                        logger.info("Stopping - no more products loading after multiple scrolls")
                         break
 
                 # Safety check to avoid infinite loops
