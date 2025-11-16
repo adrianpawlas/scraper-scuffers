@@ -1,6 +1,6 @@
 """
 Local SigLIP embeddings for fashion product images.
-Uses google/siglip-base-patch16-384 model (384 dimensions).
+Uses google/siglip-base-patch16-384 model (768 dimensions).
 """
 
 import os
@@ -46,7 +46,7 @@ class SigLIPEmbeddings:
             max_retries: Maximum number of download retries
 
         Returns:
-            List of 384 float values representing the image embedding, or None if failed
+            List of 768 float values representing the image embedding, or None if failed
         """
         if self.model is None:
             self._load_model()
@@ -203,7 +203,7 @@ def get_image_embedding(image_url: str) -> Optional[List[float]]:
         image_url: URL of the image
 
     Returns:
-        List of 384 float values or None if failed
+        List of 768 float values or None if failed
     """
     global _embeddings_instance
     if _embeddings_instance is None:
