@@ -159,11 +159,12 @@ class FashionScraper:
                             basic_product = dict(listing)
                             basic_product.update({
                                 'source': site_config.get('source'),
-                                'merchant_name': site_config.get('merchant_name'),
                                 'brand': site_config.get('brand'),
                                 'second_hand': site_config.get('second_hand', False),
-                                'country': site_config.get('country', 'eu'),
                                 'currency': site_config.get('currency', 'EUR'),
+                                # Store additional metadata
+                                'merchant_name': site_config.get('merchant_name'),
+                                'country': site_config.get('country', 'eu'),
                             })
                             products.append(basic_product)
 
