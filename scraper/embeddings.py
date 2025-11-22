@@ -67,22 +67,47 @@ class SigLIPEmbeddings:
 
             with torch.no_grad():
                 outputs = self.model(**inputs)
-                # Use image_embeds directly (768-dim for SigLIP base)
-                embeddings = outputs.image_embeds.squeeze()
-
-                # Normalize the embedding
-                embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=0)
-
-                # Convert to list
-                embedding_list = embeddings.cpu().numpy().tolist()
-
-                # Verify dimensions (should be exactly 768)
-                if len(embedding_list) != 768:
-                    logger.error(f"Embedding dimension mismatch: got {len(embedding_list)}, expected 768")
+                
+                # Try to get image_embeds (768-dim for SigLIP base)
+                # If it doesn't exist or has wrong dimensions, extract from vision model
+                try:
+                    if hasattr(outputs, 'image_embeds'):
+                        embeddings = outputs.image_embeds.squeeze()
+                        embedding_list = embeddings.cpu().numpy().tolist()
+                        
+                        # If image_embeds gives wrong dimensions (1024), fall back to vision model output
+                        if len(embedding_list) != 768:
+                            logger.warning(f"image_embeds has {len(embedding_list)} dims, extracting from vision_model_output")
+                            raise AttributeError("Wrong dimensions, use fallback")
+                        
+                        # Normalize and return
+                        embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=0)
+                        embedding_list = embeddings.cpu().numpy().tolist()
+                        logger.debug(f"Generated embedding for {image_url}: dimension {len(embedding_list)}")
+                        return embedding_list
+                except (AttributeError, TypeError):
+                    pass
+                
+                # Fallback: Extract from vision model output and mean pool to get 768 dimensions
+                if hasattr(outputs, 'vision_model_output') and hasattr(outputs.vision_model_output, 'last_hidden_state'):
+                    vision_hidden = outputs.vision_model_output.last_hidden_state
+                    # Mean pool over sequence dimension (dim=1) to get [batch_size, hidden_size]
+                    embeddings = vision_hidden.mean(dim=1).squeeze()
+                    # Normalize the embedding
+                    embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=0)
+                    # Convert to list
+                    embedding_list = embeddings.cpu().numpy().tolist()
+                    
+                    # Verify dimensions (should be exactly 768)
+                    if len(embedding_list) != 768:
+                        logger.error(f"Embedding dimension mismatch: got {len(embedding_list)}, expected 768")
+                        return None
+                    
+                    logger.debug(f"Generated embedding for {image_url}: dimension {len(embedding_list)}")
+                    return embedding_list
+                else:
+                    logger.error(f"Could not extract embeddings from model output. Available attributes: {dir(outputs)}")
                     return None
-
-            logger.debug(f"Generated embedding for {image_url}: dimension {len(embedding_list)}")
-            return embedding_list
 
         except Exception as e:
             logger.error(f"Failed to generate embedding for {image_url}: {e}")
@@ -136,18 +161,44 @@ class SigLIPEmbeddings:
 
                     with torch.no_grad():
                         outputs = self.model(**inputs)
-                        # Use image_embeds directly (768-dim for SigLIP base)
-                        image_embeddings = outputs.image_embeds
-                        image_embeddings = torch.nn.functional.normalize(image_embeddings, p=2, dim=1)
-
-                        # Convert to list of lists
-                        batch_embeddings = image_embeddings.cpu().numpy().tolist()
+                        
+                        # Try to get image_embeds (768-dim for SigLIP base)
+                        # If it doesn't exist or has wrong dimensions, extract from vision model
+                        try:
+                            if hasattr(outputs, 'image_embeds'):
+                                image_embeddings = outputs.image_embeds
+                                # Check dimensions of first embedding
+                                test_emb = image_embeddings[0].cpu().numpy().tolist()
+                                if len(test_emb) != 768:
+                                    logger.warning(f"image_embeds has {len(test_emb)} dims, extracting from vision_model_output")
+                                    raise AttributeError("Wrong dimensions, use fallback")
+                                
+                                # Normalize and use
+                                image_embeddings = torch.nn.functional.normalize(image_embeddings, p=2, dim=1)
+                                batch_embeddings = image_embeddings.cpu().numpy().tolist()
+                            else:
+                                raise AttributeError("No image_embeds, use fallback")
+                        except (AttributeError, TypeError):
+                            # Fallback: Extract from vision model output and mean pool to get 768 dimensions
+                            if hasattr(outputs, 'vision_model_output') and hasattr(outputs.vision_model_output, 'last_hidden_state'):
+                                vision_hidden = outputs.vision_model_output.last_hidden_state
+                                # Mean pool over sequence dimension (dim=1) to get [batch_size, hidden_size]
+                                image_embeddings = vision_hidden.mean(dim=1)
+                                # Normalize the embedding
+                                image_embeddings = torch.nn.functional.normalize(image_embeddings, p=2, dim=1)
+                                # Convert to list of lists
+                                batch_embeddings = image_embeddings.cpu().numpy().tolist()
+                            else:
+                                logger.error(f"Could not extract embeddings from model output")
+                                batch_embeddings = [None] * len(valid_images)
 
                     # Map back to original positions and verify dimensions
                     batch_results = [None] * len(batch_urls)
                     for idx, embedding in zip(valid_indices, batch_embeddings):
+                        if embedding is None:
+                            batch_results[idx] = None
                         # Verify dimensions (should be exactly 768)
-                        if len(embedding) != 768:
+                        elif len(embedding) != 768:
                             logger.error(f"Embedding dimension mismatch: got {len(embedding)}, expected 768")
                             batch_results[idx] = None
                         else:

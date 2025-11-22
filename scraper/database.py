@@ -1,26 +1,41 @@
 """
 Supabase database operations for fashion scraper.
+Uses direct REST API calls to avoid Edge Function requirements.
 """
 
 import os
 import logging
 import hashlib
+import json
 from typing import Dict, List, Any, Optional
-from supabase import create_client, Client
+import requests
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-class SupabaseDB:
-    def __init__(self):
-        self.supabase_url = os.getenv('SUPABASE_URL')
-        self.supabase_key = os.getenv('SUPABASE_KEY')
+class SupabaseREST:
+    """
+    Minimal Supabase PostgREST helper for upserting into 'products' table.
+    Uses direct REST API calls instead of the official client to avoid Edge Function requirements.
+    """
+    def __init__(self, url: str = None, key: str = None):
+        self.base_url = (url or os.getenv('SUPABASE_URL', '')).rstrip("/")
+        self.key = key or os.getenv('SUPABASE_KEY', '')
 
-        if not self.supabase_url or not self.supabase_key:
+        if not self.base_url or not self.key:
             raise ValueError("SUPABASE_URL and SUPABASE_KEY environment variables are required")
 
-        self.client: Client = create_client(self.supabase_url, self.supabase_key)
-        logger.info("Connected to Supabase")
+        self.session = requests.Session()
+        self.session.headers.update({
+            "apikey": self.key,
+            "Authorization": f"Bearer {self.key}",
+            "Content-Type": "application/json",
+        })
+        logger.info("Connected to Supabase via REST API")
+
+class SupabaseDB:
+    def __init__(self):
+        self.rest_client = SupabaseREST()
 
     def upsert_products(self, products: List[Dict[str, Any]]) -> bool:
         """
@@ -58,22 +73,56 @@ class SupabaseDB:
 
             logger.info(f"Upserting {len(formatted_products)} unique products (removed {len(products) - len(formatted_products)} duplicates)")
 
-            # Perform upsert in batches to avoid PostgreSQL constraint issues
-            batch_size = 50
-            for i in range(0, len(formatted_products), batch_size):
-                batch = formatted_products[i:i + batch_size]
+            # Deduplicate by 'id' within this batch to avoid conflicts
+            seen: Dict[str, Dict] = {}
+            for p in formatted_products:
+                key = p.get('id')
+                if key:
+                    seen[key] = p
+
+            products_to_upsert = list(seen.values())
+
+            # Normalize all products to have the same keys (Supabase requirement)
+            all_keys = set()
+            for p in products_to_upsert:
+                all_keys.update(p.keys())
+
+            # Ensure every product has all keys (fill missing with None)
+            normalized_products = []
+            for p in products_to_upsert:
+                normalized = {key: p.get(key) for key in all_keys}
+                normalized_products.append(normalized)
+
+            # Use on_conflict query parameter for upsert
+            endpoint = f"{self.rest_client.base_url}/rest/v1/products"
+            params = {"on_conflict": "source,product_url"}
+            headers = {
+                "Prefer": "resolution=merge-duplicates,return=minimal",
+            }
+
+            # Chunk inserts to keep requests reasonable (metadata can be large)
+            chunk_size = 100
+            success_count = 0
+            for i in range(0, len(normalized_products), chunk_size):
+                chunk = normalized_products[i:i + chunk_size]
                 try:
-                    result = self.client.table('products').upsert(
-                        batch,
-                        on_conflict='source,product_url'
-                    ).execute()
+                    resp = self.rest_client.session.post(
+                        endpoint,
+                        params=params,
+                        headers=headers,
+                        json=chunk,  # Use json parameter instead of data=json.dumps()
+                        timeout=60
+                    )
+                    if resp.status_code not in (200, 201, 204):
+                        logger.error(f"Failed to upsert batch {i//chunk_size + 1}: {resp.status_code} {resp.text}")
+                        continue
+                    success_count += len(chunk)
                 except Exception as batch_error:
-                    logger.error(f"Failed to upsert batch {i//batch_size + 1}: {batch_error}")
-                    # Continue with other batches
+                    logger.error(f"Failed to upsert batch {i//chunk_size + 1}: {batch_error}")
                     continue
 
-            logger.info(f"Successfully upserted products in batches")
-            return True
+            logger.info(f"Successfully upserted {success_count} products in batches")
+            return success_count > 0
 
         except Exception as e:
             logger.error(f"Failed to upsert products: {e}")
@@ -200,13 +249,14 @@ class SupabaseDB:
             Number of products
         """
         try:
-            query = self.client.table('products').select('id', count='exact')
-
+            url = f"{self.rest_client.base_url}/rest/v1/products"
+            params = {"select": "id"}
             if source:
-                query = query.eq('source', source)
-
-            result = query.execute()
-            return result.count
+                params["source"] = f"eq.{source}"
+            
+            resp = self.rest_client.session.get(url, params=params, timeout=60)
+            resp.raise_for_status()
+            return len(resp.json())
 
         except Exception as e:
             logger.error(f"Failed to get product count: {e}")
@@ -224,8 +274,15 @@ class SupabaseDB:
             List of recent products
         """
         try:
-            result = self.client.table('products').select('*').eq('source', source).order('created_at', desc=True).limit(limit).execute()
-            return result.data
+            url = f"{self.rest_client.base_url}/rest/v1/products"
+            params = {
+                "source": f"eq.{source}",
+                "order": "created_at.desc",
+                "limit": str(limit)
+            }
+            resp = self.rest_client.session.get(url, params=params, timeout=60)
+            resp.raise_for_status()
+            return resp.json()
 
         except Exception as e:
             logger.error(f"Failed to get recent products: {e}")
