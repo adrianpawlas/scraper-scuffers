@@ -67,8 +67,11 @@ class SigLIPEmbeddings:
 
             with torch.no_grad():
                 outputs = self.model(**inputs)
-                # Use vision model output (image embeddings)
-                embeddings = outputs.vision_model_output.pooler_output
+                # Use vision model last hidden state and pool it (mean pooling)
+                # This gives us 768 dimensions for siglip-base-patch16-384
+                vision_hidden = outputs.vision_model_output.last_hidden_state
+                # Mean pool over sequence dimension (dim=1) to get [batch_size, hidden_size]
+                embeddings = vision_hidden.mean(dim=1)
 
                 # Normalize the embedding
                 embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
@@ -132,7 +135,9 @@ class SigLIPEmbeddings:
                     with torch.no_grad():
                         outputs = self.model(**inputs)
                         # Get image embeddings from vision model
-                        image_embeddings = outputs.vision_model_output.pooler_output
+                        # Use last_hidden_state and mean pool to get 768 dimensions
+                        vision_hidden = outputs.vision_model_output.last_hidden_state
+                        image_embeddings = vision_hidden.mean(dim=1)  # Mean pool over sequence
                         image_embeddings = torch.nn.functional.normalize(image_embeddings, p=2, dim=1)
 
                         # Convert to list of lists
