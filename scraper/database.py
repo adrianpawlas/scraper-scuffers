@@ -93,9 +93,8 @@ class SupabaseDB:
                 normalized = {key: p.get(key) for key in all_keys}
                 normalized_products.append(normalized)
 
-            # Use on_conflict query parameter for upsert
+            # Use direct POST with Prefer header for upsert (matching working code)
             endpoint = f"{self.rest_client.base_url}/rest/v1/products"
-            params = {"on_conflict": "source,product_url"}
             headers = {
                 "Prefer": "resolution=merge-duplicates,return=minimal",
             }
@@ -108,9 +107,8 @@ class SupabaseDB:
                 try:
                     resp = self.rest_client.session.post(
                         endpoint,
-                        params=params,
                         headers=headers,
-                        json=chunk,  # Use json parameter instead of data=json.dumps()
+                        data=json.dumps(chunk),  # Use data=json.dumps() matching working code
                         timeout=60
                     )
                     if resp.status_code not in (200, 201, 204):
