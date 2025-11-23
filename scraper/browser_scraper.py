@@ -318,8 +318,118 @@ class BrowserScraper:
                         img_url = urljoin(base_url, img_url)
                     product_data['image_url'] = img_url
 
+            # Extract gender
+            gender = await self._determine_gender(container, page, selectors, product_url)
+            if gender:
+                product_data['gender'] = gender
+
             return product_data
 
         except Exception as e:
             logger.error(f"Error extracting product from container: {e}")
+            return None
+
+    async def _determine_gender(self, container, page: Page, selectors: Dict[str, str], product_url: str) -> Optional[str]:
+        """
+        Determine product gender from page and container content.
+
+        Args:
+            container: Product container element
+            page: Playwright page object
+            selectors: CSS selectors
+            product_url: Product URL
+
+        Returns:
+            'men', 'women', or None
+        """
+        try:
+            # Check URL for gender indicators
+            url_lower = product_url.lower()
+            if 'women' in url_lower or 'woman' in url_lower or 'female' in url_lower:
+                return 'women'
+            elif 'men' in url_lower or 'man' in url_lower or 'male' in url_lower:
+                return 'men'
+
+            # Check page title
+            title_elem = await page.query_selector('title')
+            if title_elem:
+                title_text = await title_elem.text_content()
+                title_lower = title_text.lower()
+                if 'women' in title_lower or 'woman' in title_lower:
+                    return 'women'
+                elif 'men' in title_lower or 'man' in title_lower:
+                    return 'men'
+
+            # Check meta description
+            meta_desc = await page.query_selector('meta[name="description"]')
+            if meta_desc:
+                desc_content = await meta_desc.get_attribute('content')
+                if desc_content:
+                    desc_lower = desc_content.lower()
+                    if '(man)' in desc_lower or '(male)' in desc_lower or 'man wearing' in desc_lower:
+                        return 'men'
+                    elif '(woman)' in desc_lower or '(female)' in desc_lower or 'woman wearing' in desc_lower:
+                        return 'women'
+
+            # Check breadcrumbs for gender context
+            breadcrumbs = await page.query_selector_all('.breadcrumb, .breadcrumbs, [class*="breadcrumb"]')
+            for crumb in breadcrumbs:
+                try:
+                    crumb_text = await crumb.text_content()
+                    crumb_lower = crumb_text.lower()
+                    if 'women' in crumb_lower or 'woman' in crumb_lower or 'female' in crumb_lower:
+                        return 'women'
+                    elif 'men' in crumb_lower or 'man' in crumb_lower or 'male' in crumb_lower:
+                        return 'men'
+                except:
+                    continue
+
+            # Check specific gender selectors
+            gender_selector = selectors.get('gender', '.gender, .category, .collection-title, h1')
+            gender_elem = await page.query_selector(gender_selector)
+            if gender_elem:
+                gender_text = await gender_elem.text_content()
+                gender_lower = gender_text.lower()
+                if 'women' in gender_lower or 'woman' in gender_lower or 'female' in gender_lower:
+                    return 'women'
+                elif 'men' in gender_lower or 'man' in gender_lower or 'male' in gender_lower:
+                    return 'men'
+
+            # Check product title for gender indicators
+            title_elem = await container.query_selector(selectors.get('title', 'h1, .product-title, .title'))
+            if title_elem:
+                title_text = await title_elem.text_content()
+                title_lower = title_text.lower()
+                if any(term in title_lower for term in ['men\'s', 'man\'s', 'male', 'for men', 'men only']):
+                    return 'men'
+                elif any(term in title_lower for term in ['women\'s', 'woman\'s', 'female', 'for women', 'women only']):
+                    return 'women'
+                elif 'unisex' in title_lower:
+                    return None  # Could be either
+
+            # Check product description for gender indicators
+            desc_elem = await container.query_selector('.product-description, .description, [class*="description"]')
+            if desc_elem:
+                desc_text = await desc_elem.text_content()
+                desc_lower = desc_text.lower()
+                if any(term in desc_lower for term in ['men\'s', 'man\'s', 'male', 'unisex']):
+                    if 'unisex' in desc_lower:
+                        return None  # Could be either
+                    elif any(term in desc_lower for term in ['men\'s', 'man\'s', 'male']):
+                        return 'men'
+                elif any(term in desc_lower for term in ['women\'s', 'woman\'s', 'female']):
+                    return 'women'
+
+            # Check for collection/category context in URL
+            page_url = page.url.lower()
+            if '/collections/women' in page_url or '/women' in page_url:
+                return 'women'
+            elif '/collections/men' in page_url or '/men' in page_url:
+                return 'men'
+
+            # Default to None - will be determined by collection context if needed
+            return None
+
+        except Exception as e:
+            logger.debug(f"Error determining gender for {product_url}: {e}")
             return None
