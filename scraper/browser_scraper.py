@@ -319,9 +319,11 @@ class BrowserScraper:
                     product_data['image_url'] = img_url
 
             # Extract gender and category
-            category = await self._determine_category(container, page, selectors, product_url)
+            gender, category = await self._determine_category(container, page, selectors, product_url)
+            if gender:
+                product_data['gender'] = gender
             if category:
-                product_data['gender'] = category
+                product_data['category'] = category
 
             return product_data
 
@@ -329,10 +331,9 @@ class BrowserScraper:
             logger.error(f"Error extracting product from container: {e}")
             return None
 
-    async def _determine_category(self, container, page: Page, selectors: Dict[str, str], product_url: str) -> Optional[str]:
+    async def _determine_category(self, container, page: Page, selectors: Dict[str, str], product_url: str) -> tuple[Optional[str], Optional[str]]:
         """
-        Determine product category and gender from page and container content.
-        Returns comma-separated values like "women, accessory" or "men, footwear".
+        Determine product gender and category from page and container content.
 
         Args:
             container: Product container element
@@ -341,7 +342,9 @@ class BrowserScraper:
             product_url: Product URL
 
         Returns:
-            Category string like 'men', 'women', 'women, accessory', 'men, footwear', etc.
+            Tuple of (gender, category) where:
+            - gender: 'men', 'women', or None
+            - category: 'accessory', 'footwear', 'other', or None
         """
         try:
             gender = None
@@ -521,16 +524,15 @@ class BrowserScraper:
                 elif any(term in page_url for term in ['/clothing', '/tops', '/bottoms', '/dresses', '/jackets']):
                     category_type = 'clothing'
 
-            # Combine results
-            categories = []
-            if gender:
-                categories.append(gender)
-            if category_type and category_type != 'clothing':  # Don't add 'clothing' as it's the default
-                categories.append(category_type)
-            elif not category_type and not gender:
-                categories.append('other')
+            # Determine final category
+            final_category = None
+            if category_type and category_type != 'clothing':  # Don't save 'clothing' as it's the default
+                final_category = category_type
+            elif not gender:
+                # If no gender detected and no specific category, mark as 'other'
+                final_category = 'other'
 
-            return ', '.join(categories) if categories else None
+            return gender, final_category
 
         except Exception as e:
             logger.debug(f"Error determining category for {product_url}: {e}")
