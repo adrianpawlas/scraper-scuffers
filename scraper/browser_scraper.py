@@ -58,9 +58,10 @@ class BrowserScraper:
             products = []
             previous_count = 0
             no_change_count = 0
-            max_no_change = 10  # More attempts to find new products
+            max_no_change = 15  # More attempts to find new products (increased for safety)
             load_attempts = 0
-            max_load_attempts = 20  # More attempts
+            successful_clicks = 0
+            max_load_attempts = 60  # Enough attempts for 1321 products (44+ clicks)
 
             while len(products) < max_products and load_attempts < max_load_attempts:
                 load_attempts += 1
@@ -143,6 +144,16 @@ class BrowserScraper:
 
                                     logger.info(f"Found potential button: '{text}' (visible: {is_visible}, disabled: {is_disabled}, next-url: {next_url})")
 
+                                    # Stop if button is disabled or has no next URL (indicates no more content)
+                                    if is_disabled:
+                                        logger.info("Button is disabled - no more content to load")
+                                        button_clicked = True  # Set to true to break out of loop
+                                        break
+                                    elif next_url == "" or next_url is None:
+                                        logger.info("Button has no next URL - likely no more content to load")
+                                        # Still try clicking once to be sure, but don't count as successful
+                                        pass
+
                                     # Try clicking even if not visible initially
                                     if not is_disabled:
                                         logger.info(f"Attempt {load_attempts}: Clicking {text} button...")
@@ -172,6 +183,9 @@ class BrowserScraper:
                                                     logger.error(f"All click methods failed: {e3}")
 
                                         if click_success:
+                                            successful_clicks += 1
+                                            logger.info(f"✅ Successful click #{successful_clicks} on '{text}' button")
+
                                             # Wait for network activity to settle
                                             await page.wait_for_load_state('networkidle', timeout=15000)
 
@@ -197,7 +211,8 @@ class BrowserScraper:
                 if not button_clicked:
                     logger.info(f"Attempt {load_attempts}: No clickable Load More button found")
                     # If no button found after first few attempts, stop trying
-                    if load_attempts >= 3:
+                    # But allow more attempts since we need 44+ clicks for 1321 products
+                    if load_attempts >= 5:
                         logger.info("No Load More button found after multiple attempts, stopping")
                         break
 
@@ -224,7 +239,7 @@ class BrowserScraper:
                     logger.info(f"Reached maximum product limit: {max_products}")
                     break
 
-            logger.info(f"Final result: {len(products)} products collected after {load_attempts} load attempts")
+            logger.info(f"Final result: {len(products)} products collected after {load_attempts} load attempts, {successful_clicks} successful clicks")
             await page.close()
             return products[:max_products]
 
