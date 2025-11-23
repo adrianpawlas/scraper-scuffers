@@ -61,7 +61,7 @@ class BrowserScraper:
             max_no_change = 15  # More attempts to find new products (increased for safety)
             load_attempts = 0
             successful_clicks = 0
-            max_load_attempts = 60  # Enough attempts for 1321 products (44+ clicks)
+            max_load_attempts = 100  # Allow up to 100 attempts for maximum coverage
 
             while len(products) < max_products and load_attempts < max_load_attempts:
                 load_attempts += 1
@@ -211,8 +211,8 @@ class BrowserScraper:
                 if not button_clicked:
                     logger.info(f"Attempt {load_attempts}: No clickable Load More button found")
                     # If no button found after first few attempts, stop trying
-                    # But allow more attempts since we need 44+ clicks for 1321 products
-                    if load_attempts >= 5:
+                    # Allow more attempts since we want maximum coverage
+                    if load_attempts >= 15:
                         logger.info("No Load More button found after multiple attempts, stopping")
                         break
 
@@ -225,7 +225,12 @@ class BrowserScraper:
                     products = current_products
                     previous_count = len(current_products)
                     no_change_count = 0
-                    logger.info(f"New products found! Total: {len(products)}")
+                    progress_msg = f"New products found! Total: {len(products)}"
+                    if len(products) >= 1300:
+                        progress_msg += " 🎯 Almost there!"
+                    elif len(products) >= 1000:
+                        progress_msg += f" (target: 1321, {1321 - len(products)} remaining)"
+                    logger.info(progress_msg)
                 else:
                     no_change_count += 1
                     logger.info(f"No new products found (attempt {no_change_count}/{max_no_change})")
@@ -240,6 +245,12 @@ class BrowserScraper:
                     break
 
             logger.info(f"Final result: {len(products)} products collected after {load_attempts} load attempts, {successful_clicks} successful clicks")
+            if len(products) >= 1300:
+                logger.info("🎉 Excellent! Reached or exceeded target of 1321 products!")
+            elif len(products) >= 1000:
+                logger.info(f"✅ Good progress! Got {len(products)} products, close to the 1321 target")
+            else:
+                logger.info(f"📊 Got {len(products)} products. Target is 1321 - may need more attempts")
             await page.close()
             return products[:max_products]
 
