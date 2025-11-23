@@ -318,10 +318,10 @@ class BrowserScraper:
                         img_url = urljoin(base_url, img_url)
                     product_data['image_url'] = img_url
 
-            # Extract gender
-            gender = await self._determine_gender(container, page, selectors, product_url)
-            if gender:
-                product_data['gender'] = gender
+            # Extract gender and category
+            category = await self._determine_category(container, page, selectors, product_url)
+            if category:
+                product_data['gender'] = category
 
             return product_data
 
@@ -329,9 +329,10 @@ class BrowserScraper:
             logger.error(f"Error extracting product from container: {e}")
             return None
 
-    async def _determine_gender(self, container, page: Page, selectors: Dict[str, str], product_url: str) -> Optional[str]:
+    async def _determine_category(self, container, page: Page, selectors: Dict[str, str], product_url: str) -> Optional[str]:
         """
-        Determine product gender from page and container content.
+        Determine product category and gender from page and container content.
+        Returns comma-separated values like "women, accessory" or "men, footwear".
 
         Args:
             container: Product container element
@@ -340,25 +341,50 @@ class BrowserScraper:
             product_url: Product URL
 
         Returns:
-            'men', 'women', or None
+            Category string like 'men', 'women', 'women, accessory', 'men, footwear', etc.
         """
         try:
-            # Check URL for gender indicators
+            gender = None
+            category_type = None
+
+            # Check URL for both gender and category indicators
             url_lower = product_url.lower()
+
+            # Gender detection
             if 'women' in url_lower or 'woman' in url_lower or 'female' in url_lower:
-                return 'women'
+                gender = 'women'
             elif 'men' in url_lower or 'man' in url_lower or 'male' in url_lower:
-                return 'men'
+                gender = 'men'
+
+            # Category detection
+            if any(term in url_lower for term in ['accessory', 'accessories', 'bag', 'bags', 'jewelry', 'hat', 'cap', 'scarf', 'belt', 'wallet']):
+                category_type = 'accessory'
+            elif any(term in url_lower for term in ['shoe', 'shoes', 'boot', 'boots', 'sneaker', 'sneakers', 'footwear', 'sandal', 'sandals']):
+                category_type = 'footwear'
+            elif any(term in url_lower for term in ['jacket', 'coat', 'shirt', 'top', 'dress', 'skirt', 'pants', 'trousers', 'jeans', 'short', 'sweater']):
+                category_type = 'clothing'
 
             # Check page title
             title_elem = await page.query_selector('title')
             if title_elem:
                 title_text = await title_elem.text_content()
                 title_lower = title_text.lower()
-                if 'women' in title_lower or 'woman' in title_lower:
-                    return 'women'
-                elif 'men' in title_lower or 'man' in title_lower:
-                    return 'men'
+
+                # Gender detection
+                if not gender:
+                    if 'women' in title_lower or 'woman' in title_lower:
+                        gender = 'women'
+                    elif 'men' in title_lower or 'man' in title_lower:
+                        gender = 'men'
+
+                # Category detection
+                if not category_type:
+                    if any(term in title_lower for term in ['accessory', 'accessories', 'bag', 'bags', 'jewelry', 'hat', 'cap', 'scarf', 'belt', 'wallet']):
+                        category_type = 'accessory'
+                    elif any(term in title_lower for term in ['shoe', 'shoes', 'boot', 'boots', 'sneaker', 'sneakers', 'footwear', 'sandal', 'sandals']):
+                        category_type = 'footwear'
+                    elif any(term in title_lower for term in ['jacket', 'coat', 'shirt', 'top', 'dress', 'skirt', 'pants', 'trousers', 'jeans', 'short', 'sweater']):
+                        category_type = 'clothing'
 
             # Check meta description
             meta_desc = await page.query_selector('meta[name="description"]')
@@ -366,70 +392,146 @@ class BrowserScraper:
                 desc_content = await meta_desc.get_attribute('content')
                 if desc_content:
                     desc_lower = desc_content.lower()
-                    if '(man)' in desc_lower or '(male)' in desc_lower or 'man wearing' in desc_lower:
-                        return 'men'
-                    elif '(woman)' in desc_lower or '(female)' in desc_lower or 'woman wearing' in desc_lower:
-                        return 'women'
 
-            # Check breadcrumbs for gender context
+                    # Gender detection
+                    if not gender:
+                        if '(man)' in desc_lower or '(male)' in desc_lower or 'man wearing' in desc_lower:
+                            gender = 'men'
+                        elif '(woman)' in desc_lower or '(female)' in desc_lower or 'woman wearing' in desc_lower:
+                            gender = 'women'
+
+                    # Category detection
+                    if not category_type:
+                        if any(term in desc_lower for term in ['accessory', 'accessories', 'bag', 'bags', 'jewelry', 'hat', 'cap', 'scarf', 'belt', 'wallet']):
+                            category_type = 'accessory'
+                        elif any(term in desc_lower for term in ['shoe', 'shoes', 'boot', 'boots', 'sneaker', 'sneakers', 'footwear', 'sandal', 'sandals']):
+                            category_type = 'footwear'
+                        elif any(term in desc_lower for term in ['jacket', 'coat', 'shirt', 'top', 'dress', 'skirt', 'pants', 'trousers', 'jeans', 'short', 'sweater']):
+                            category_type = 'clothing'
+
+            # Check breadcrumbs
             breadcrumbs = await page.query_selector_all('.breadcrumb, .breadcrumbs, [class*="breadcrumb"]')
             for crumb in breadcrumbs:
                 try:
                     crumb_text = await crumb.text_content()
                     crumb_lower = crumb_text.lower()
-                    if 'women' in crumb_lower or 'woman' in crumb_lower or 'female' in crumb_lower:
-                        return 'women'
-                    elif 'men' in crumb_lower or 'man' in crumb_lower or 'male' in crumb_lower:
-                        return 'men'
+
+                    # Gender detection
+                    if not gender:
+                        if 'women' in crumb_lower or 'woman' in crumb_lower or 'female' in crumb_lower:
+                            gender = 'women'
+                        elif 'men' in crumb_lower or 'man' in crumb_lower or 'male' in crumb_lower:
+                            gender = 'men'
+
+                    # Category detection
+                    if not category_type:
+                        if any(term in crumb_lower for term in ['accessory', 'accessories', 'bag', 'bags', 'jewelry', 'hat', 'cap', 'scarf', 'belt', 'wallet']):
+                            category_type = 'accessory'
+                        elif any(term in crumb_lower for term in ['shoe', 'shoes', 'boot', 'boots', 'sneaker', 'sneakers', 'footwear', 'sandal', 'sandals']):
+                            category_type = 'footwear'
+                        elif any(term in crumb_lower for term in ['jacket', 'coat', 'shirt', 'top', 'dress', 'skirt', 'pants', 'trousers', 'jeans', 'short', 'sweater']):
+                            category_type = 'clothing'
                 except:
                     continue
 
-            # Check specific gender selectors
+            # Check specific selectors
             gender_selector = selectors.get('gender', '.gender, .category, .collection-title, h1')
             gender_elem = await page.query_selector(gender_selector)
             if gender_elem:
                 gender_text = await gender_elem.text_content()
                 gender_lower = gender_text.lower()
-                if 'women' in gender_lower or 'woman' in gender_lower or 'female' in gender_lower:
-                    return 'women'
-                elif 'men' in gender_lower or 'man' in gender_lower or 'male' in gender_lower:
-                    return 'men'
 
-            # Check product title for gender indicators
+                # Gender detection
+                if not gender:
+                    if 'women' in gender_lower or 'woman' in gender_lower or 'female' in gender_lower:
+                        gender = 'women'
+                    elif 'men' in gender_lower or 'man' in gender_lower or 'male' in gender_lower:
+                        gender = 'men'
+
+                # Category detection
+                if not category_type:
+                    if any(term in gender_lower for term in ['accessory', 'accessories', 'bag', 'bags', 'jewelry', 'hat', 'cap', 'scarf', 'belt', 'wallet']):
+                        category_type = 'accessory'
+                    elif any(term in gender_lower for term in ['shoe', 'shoes', 'boot', 'boots', 'sneaker', 'sneakers', 'footwear', 'sandal', 'sandals']):
+                        category_type = 'footwear'
+                    elif any(term in gender_lower for term in ['jacket', 'coat', 'shirt', 'top', 'dress', 'skirt', 'pants', 'trousers', 'jeans', 'short', 'sweater']):
+                        category_type = 'clothing'
+
+            # Check product title
             title_elem = await container.query_selector(selectors.get('title', 'h1, .product-title, .title'))
             if title_elem:
                 title_text = await title_elem.text_content()
                 title_lower = title_text.lower()
-                if any(term in title_lower for term in ['men\'s', 'man\'s', 'male', 'for men', 'men only']):
-                    return 'men'
-                elif any(term in title_lower for term in ['women\'s', 'woman\'s', 'female', 'for women', 'women only']):
-                    return 'women'
-                elif 'unisex' in title_lower:
-                    return None  # Could be either
 
-            # Check product description for gender indicators
+                # Gender detection
+                if not gender:
+                    if any(term in title_lower for term in ['men\'s', 'man\'s', 'male', 'for men', 'men only']):
+                        gender = 'men'
+                    elif any(term in title_lower for term in ['women\'s', 'woman\'s', 'female', 'for women', 'women only']):
+                        gender = 'women'
+                    elif 'unisex' in title_lower:
+                        gender = None  # Could be either
+
+                # Category detection
+                if not category_type:
+                    if any(term in title_lower for term in ['accessory', 'accessories', 'bag', 'bags', 'jewelry', 'hat', 'cap', 'scarf', 'belt', 'wallet']):
+                        category_type = 'accessory'
+                    elif any(term in title_lower for term in ['shoe', 'shoes', 'boot', 'boots', 'sneaker', 'sneakers', 'footwear', 'sandal', 'sandals']):
+                        category_type = 'footwear'
+                    elif any(term in title_lower for term in ['jacket', 'coat', 'shirt', 'top', 'dress', 'skirt', 'pants', 'trousers', 'jeans', 'short', 'sweater']):
+                        category_type = 'clothing'
+
+            # Check product description
             desc_elem = await container.query_selector('.product-description, .description, [class*="description"]')
             if desc_elem:
                 desc_text = await desc_elem.text_content()
                 desc_lower = desc_text.lower()
-                if any(term in desc_lower for term in ['men\'s', 'man\'s', 'male', 'unisex']):
-                    if 'unisex' in desc_lower:
-                        return None  # Could be either
-                    elif any(term in desc_lower for term in ['men\'s', 'man\'s', 'male']):
-                        return 'men'
-                elif any(term in desc_lower for term in ['women\'s', 'woman\'s', 'female']):
-                    return 'women'
 
-            # Check for collection/category context in URL
+                # Gender detection
+                if not gender:
+                    if any(term in desc_lower for term in ['men\'s', 'man\'s', 'male']):
+                        gender = 'men'
+                    elif any(term in desc_lower for term in ['women\'s', 'woman\'s', 'female']):
+                        gender = 'women'
+                    elif 'unisex' in desc_lower:
+                        gender = None
+
+                # Category detection
+                if not category_type:
+                    if any(term in desc_lower for term in ['accessory', 'accessories', 'bag', 'bags', 'jewelry', 'hat', 'cap', 'scarf', 'belt', 'wallet']):
+                        category_type = 'accessory'
+                    elif any(term in desc_lower for term in ['shoe', 'shoes', 'boot', 'boots', 'sneaker', 'sneakers', 'footwear', 'sandal', 'sandals']):
+                        category_type = 'footwear'
+                    elif any(term in desc_lower for term in ['jacket', 'coat', 'shirt', 'top', 'dress', 'skirt', 'pants', 'trousers', 'jeans', 'short', 'sweater']):
+                        category_type = 'clothing'
+
+            # Check collection/category context in URL
             page_url = page.url.lower()
-            if '/collections/women' in page_url or '/women' in page_url:
-                return 'women'
-            elif '/collections/men' in page_url or '/men' in page_url:
-                return 'men'
+            if not gender:
+                if '/collections/women' in page_url or '/women' in page_url:
+                    gender = 'women'
+                elif '/collections/men' in page_url or '/men' in page_url:
+                    gender = 'men'
 
-            # Default to None - will be determined by collection context if needed
-            return None
+            if not category_type:
+                if any(term in page_url for term in ['/accessories', '/bags', '/jewelry', '/hats', '/scarves', '/belts', '/wallets']):
+                    category_type = 'accessory'
+                elif any(term in page_url for term in ['/shoes', '/boots', '/sneakers', '/footwear', '/sandals']):
+                    category_type = 'footwear'
+                elif any(term in page_url for term in ['/clothing', '/tops', '/bottoms', '/dresses', '/jackets']):
+                    category_type = 'clothing'
+
+            # Combine results
+            categories = []
+            if gender:
+                categories.append(gender)
+            if category_type and category_type != 'clothing':  # Don't add 'clothing' as it's the default
+                categories.append(category_type)
+            elif not category_type and not gender:
+                categories.append('other')
+
+            return ', '.join(categories) if categories else None
 
         except Exception as e:
-            logger.debug(f"Error determining gender for {product_url}: {e}")
+            logger.debug(f"Error determining category for {product_url}: {e}")
             return None
