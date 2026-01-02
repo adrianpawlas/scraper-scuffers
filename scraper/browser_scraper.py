@@ -50,10 +50,13 @@ class BrowserScraper:
             await page.set_extra_http_headers({"User-Agent": self.user_agent})
 
             logger.info(f"Loading page: {url}")
-            await page.goto(url, wait_until="networkidle", timeout=60000)
+            await page.goto(url, wait_until="domcontentloaded", timeout=120000)
 
             # Wait for initial content to load
             await page.wait_for_timeout(5000)
+
+            # Handle cookie consent dialogs that might block interactions
+            await self._handle_cookie_consent(page)
 
             products = []
             previous_count = 0
@@ -72,6 +75,9 @@ class BrowserScraper:
                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
                 await page.wait_for_timeout(2000)
 
+                # Handle any cookie overlays that might have appeared
+                await self._handle_cookie_consent(page)
+
                 # Try multiple selectors for the Load More button
                 button_clicked = False
                 button_selectors = [
@@ -81,31 +87,53 @@ class BrowserScraper:
                     'button:has-text("LOAD MORE")',
                     'button:has-text("Show more")',
                     'button:has-text("SHOW MORE")',
+                    'button:has-text("Cargar más")',  # Spanish
+                    'button:has-text("CARGAR MÁS")',
+                    'button:has-text("Load more")',  # Lowercase variations
+                    'button:has-text("Show more")',
                     'button.button:has-text("Load More")',
                     'button.button:has-text("LOAD MORE")',
                     'button.button:has-text("Show more")',
                     'button.button:has-text("SHOW MORE")',
+                    'button.button:has-text("Cargar más")',
+                    'button.button:has-text("CARGAR MÁS")',
                     'button[data-load-more]',
                     '[class*="load-more"]',
                     'button:contains("Load More")',
                     'button:contains("LOAD MORE")',
                     'button:contains("Show more")',
                     'button:contains("SHOW MORE")',
+                    'button:contains("Cargar más")',
+                    'button:contains("CARGAR MÁS")',
+                    'button:contains("Charger plus")',  # French
+                    'button:contains("CHARGER PLUS")',
+                    'button:contains("Mehr laden")',  # German
+                    'button:contains("MEHR LADEN")',
+                    'button:contains("Carica altro")',  # Italian
+                    'button:contains("CARICA ALTRO")',
                     'button',
                     'a:has-text("Load More")',
                     'a:has-text("LOAD MORE")',
                     'a:has-text("Show more")',
-                    'a:has-text("SHOW MORE")'
+                    'a:has-text("SHOW MORE")',
+                    'a:has-text("Cargar más")',
+                    'a:has-text("CARGAR MÁS")'
                 ]
 
-                # Log all clickable elements containing "load", "more", or "show"
+                # Log all clickable elements containing load/more/show keywords in multiple languages
                 clickable_elements = await page.query_selector_all('button, a, [role="button"], div[onclick], span[onclick]')
                 load_more_candidates = []
+
+                # Keywords in multiple languages
+                load_more_keywords = [
+                    'load', 'more', 'show', 'cargar', 'charger', 'laden', 'carica',  # English, Spanish, French, German, Italian
+                    'más', 'plus', 'altro', 'mehr'  # Additional words
+                ]
 
                 for elem in clickable_elements:
                     try:
                         text = await elem.text_content()
-                        if text and any(keyword in text.lower() for keyword in ['load', 'more', 'show']):
+                        if text and any(keyword in text.lower() for keyword in load_more_keywords):
                             load_more_candidates.append(elem)
                     except:
                         pass
@@ -128,7 +156,13 @@ class BrowserScraper:
                                 text = await button.text_content()
                                 text = text.strip().lower() if text else ""
 
-                                if 'load more' in text or 'show more' in text:
+                                # Prioritize "load" buttons over "show" buttons, and include Spanish
+                                is_load_button = any(phrase in text for phrase in [
+                                    'load more', 'cargar más', 'charger plus', 'mehr laden', 'carica altro'
+                                ])
+                                is_show_button = 'show more' in text and not is_load_button
+
+                                if is_load_button or is_show_button:
                                     # First, try to scroll the button into view
                                     try:
                                         await button.scroll_into_view_if_needed()
@@ -158,19 +192,56 @@ class BrowserScraper:
                                     if not is_disabled:
                                         logger.info(f"Attempt {load_attempts}: Clicking {text} button...")
 
+                                        # Handle any overlays before clicking
+                                        await self._handle_cookie_consent(page)
+
                                         # Try multiple click methods
                                         click_success = False
                                         try:
-                                            # Method 1: Direct click
-                                            await button.click()
-                                            logger.info("Used direct click")
+                                            # Method 1: Direct click with force
+                                            await button.click(timeout=10000, force=True)  # Force click ignores overlays
+                                            logger.info("Used direct click (force)")
                                             click_success = True
                                         except Exception as e:
                                             logger.warning(f"Direct click failed: {e}")
                                             try:
-                                                # Method 2: JavaScript click
-                                                await button.evaluate("el => el.click()")
-                                                logger.info("Used JavaScript click")
+                                                # Method 2: JavaScript click with overlay removal
+                                                click_script = """
+                                                (el) => {
+                                                    // Remove all potential overlays
+                                                    const overlaySelectors = [
+                                                        // Cookie overlays
+                                                        '.cky-overlay', '.cky-consent-container', '[class*="cky-consent"]',
+                                                        '.cookie-banner', '.gdpr-banner', '#cookie-banner',
+
+                                                        // General overlays
+                                                        '.modal', '.popup', '.overlay', '.lightbox',
+
+                                                        // Specific popups
+                                                        '.newsletter-popup', '.discount-popup', '.promo-popup', '.sale-popup',
+                                                        '.announcement-bar', '.notification-bar', '.alert-bar',
+
+                                                        // Sale/discount specific
+                                                        '[class*="sale-banner"]', '[id*="sale-popup"]', '[class*="offer-popup"]',
+                                                        '.exit-popup', '.welcome-popup', '.subscription-popup'
+                                                    ];
+
+                                                    overlaySelectors.forEach(selector => {
+                                                        const elements = document.querySelectorAll(selector);
+                                                        elements.forEach(el => {
+                                                            el.style.display = 'none';
+                                                            el.remove();
+                                                        });
+                                                    });
+
+                                                    // Click the element
+                                                    el.scrollIntoView();
+                                                    el.click();
+                                                    return true;
+                                                }
+                                                """
+                                                await button.evaluate(click_script)
+                                                logger.info("Used JavaScript click with overlay removal")
                                                 click_success = True
                                             except Exception as e2:
                                                 logger.warning(f"JavaScript click failed: {e2}")
@@ -254,6 +325,167 @@ class BrowserScraper:
             await page.close()
             return products[:max_products]
 
+
+    async def _handle_cookie_consent(self, page: Page):
+        """Handle cookie consent dialogs that might block interactions."""
+        try:
+            logger.info("Checking for cookie consent dialogs...")
+
+            # First try to accept cookies
+            cookie_selectors = [
+                'button[data-cky-tag="accept-button"]',
+                '.cky-btn-accept',
+                'button.cky-btn-accept',
+                'button:has-text("Accept All")',
+                'button:has-text("ACCEPT ALL")',
+                'button:has-text("Accept")',
+                'button:has-text("ACCEPT")',
+                'button:has-text("Agree")',
+                'button:has-text("AGREE")',
+                'button:has-text("Allow All")',
+                'button:has-text("ALLOW ALL")',
+                'button:has-text("Yes")',
+                'button:has-text("YES")',
+                '[class*="accept"]',
+                '[class*="agree"]',
+                'a.cky-btn-accept'
+            ]
+
+            # First handle discount/sale popups that might be blocking
+            discount_selectors = [
+                'button:has-text("No thanks")',
+                'button:has-text("NO THANKS")',
+                'button:has-text("Close")',
+                'button:has-text("CLOSE")',
+                'button:has-text("×")',
+                'button:has-text("X")',
+                'button:has-text("✕")',
+                '.discount-popup .close',
+                '.sale-popup .close',
+                '.promo-popup .close',
+                '[class*="discount"] .close',
+                '[class*="promo"] .close',
+                '[class*="sale"] .close'
+            ]
+
+            for selector in discount_selectors:
+                try:
+                    close_buttons = await page.query_selector_all(selector)
+                    for button in close_buttons:
+                        try:
+                            is_visible = await button.is_visible()
+                            if is_visible:
+                                logger.info(f"Found discount popup close button: {selector}")
+                                await button.click(timeout=2000)
+                                logger.info("Closed discount popup")
+                                await page.wait_for_timeout(500)
+                                break
+                        except:
+                            continue
+                except Exception as e:
+                    logger.debug(f"Discount popup selector {selector} failed: {e}")
+                    continue
+
+            # Then handle cookie consent
+            for selector in cookie_selectors:
+                try:
+                    accept_buttons = await page.query_selector_all(selector)
+                    for button in accept_buttons:
+                        try:
+                            is_visible = await button.is_visible()
+                            if is_visible:
+                                logger.info(f"Found cookie consent button: {selector}")
+                                # Try direct click first
+                                try:
+                                    await button.click(timeout=2000)
+                                    logger.info("Accepted cookie consent via direct click")
+                                    await page.wait_for_timeout(1000)
+                                    return
+                                except:
+                                    # Try JavaScript click
+                                    try:
+                                        await button.evaluate("el => el.click()")
+                                        logger.info("Accepted cookie consent via JavaScript click")
+                                        await page.wait_for_timeout(1000)
+                                        return
+                                    except:
+                                        pass
+                        except:
+                            continue
+                except Exception as e:
+                    logger.debug(f"Cookie consent selector {selector} failed: {e}")
+                    continue
+
+            # If accepting didn't work, try to remove/hide the overlay entirely
+            logger.info("Cookie acceptance failed, trying to remove overlay...")
+            overlay_removal_script = """
+            // Remove common overlay elements including discount popups
+            const overlaySelectors = [
+                // Cookie overlays
+                '.cky-overlay', '.cky-consent-container', '[class*="cky-consent"]',
+                '.cookie-banner', '.gdpr-banner', '#cookie-banner',
+                '.cookie-consent', '.gdpr-consent', '[class*="cookie-popup"]',
+
+                // General overlays
+                '.modal', '.popup', '.overlay', '.lightbox',
+
+                // Specific popups
+                '.newsletter-popup', '.discount-popup', '.promo-popup', '.sale-popup',
+                '.announcement-bar', '.notification-bar', '.alert-bar',
+
+                // Generic selectors
+                '[class*="modal"]', '[class*="popup"]', '[class*="overlay"]',
+                '[id*="modal"]', '[id*="popup"]', '[id*="overlay"]',
+                '[class*="newsletter"]', '[class*="discount"]', '[class*="promo"]',
+                '[class*="announcement"]', '[class*="notification"]',
+
+                // Sale/discount specific
+                '[class*="sale-banner"]', '[id*="sale-popup"]', '[class*="offer-popup"]',
+                '.exit-popup', '.welcome-popup', '.subscription-popup'
+            ];
+
+            overlaySelectors.forEach(selector => {
+                const elements = document.querySelectorAll(selector);
+                elements.forEach(el => {
+                    el.style.display = 'none';
+                    el.remove();
+                });
+            });
+
+            // Hide any fixed/absolute positioned elements that might overlay
+            const allElements = document.querySelectorAll('*');
+            allElements.forEach(el => {
+                const style = window.getComputedStyle(el);
+                if ((style.position === 'fixed' || style.position === 'absolute') &&
+                    (parseInt(style.zIndex) > 1000 || style.zIndex === '9999')) {
+                    // Check if it looks like an overlay/popup/modal
+                    if (el.classList.contains('cky') || el.id.includes('cky') ||
+                        el.classList.contains('cookie') || el.id.includes('cookie') ||
+                        el.classList.contains('modal') || el.classList.contains('popup') ||
+                        el.classList.contains('overlay') || el.classList.contains('lightbox') ||
+                        el.classList.contains('newsletter') || el.classList.contains('discount') ||
+                        el.classList.contains('promo') || el.classList.contains('announcement') ||
+                        el.classList.contains('notification') || el.classList.contains('alert') ||
+                        el.classList.contains('sale') || el.classList.contains('offer') ||
+                        el.classList.contains('welcome') || el.classList.contains('subscription') ||
+                        el.classList.contains('exit')) {
+                        el.style.display = 'none';
+                    }
+                }
+            });
+
+            return true;
+            """
+
+            try:
+                await page.evaluate(overlay_removal_script)
+                logger.info("Removed cookie overlay via JavaScript")
+                await page.wait_for_timeout(500)
+            except Exception as e:
+                logger.debug(f"Overlay removal failed: {e}")
+
+        except Exception as e:
+            logger.debug(f"Cookie consent handling failed: {e}")
 
     async def _extract_products_from_page(self, page: Page, selectors: Dict[str, str]) -> List[Dict[str, Any]]:
         """Extract product data from the current page state."""
