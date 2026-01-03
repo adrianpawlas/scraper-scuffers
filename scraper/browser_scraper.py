@@ -50,7 +50,7 @@ class BrowserScraper:
             await page.set_extra_http_headers({"User-Agent": self.user_agent})
 
             logger.info(f"Loading page: {url}")
-            await page.goto(url, wait_until="domcontentloaded", timeout=120000)
+            await page.goto(url, wait_until="domcontentloaded", timeout=180000)  # Increased timeout for slow sites
 
             # Wait for initial content to load
             await page.wait_for_timeout(5000)
@@ -61,10 +61,10 @@ class BrowserScraper:
             products = []
             previous_count = 0
             no_change_count = 0
-            max_no_change = 15  # More attempts to find new products (increased for safety)
+            max_no_change = 50  # Allow more attempts since we need to load many products (increased from 15)
             load_attempts = 0
             successful_clicks = 0
-            max_load_attempts = 100  # Allow up to 100 attempts for maximum coverage
+            max_load_attempts = 200  # Allow up to 200 attempts for maximum coverage (increased from 100)
 
             while len(products) < max_products and load_attempts < max_load_attempts:
                 load_attempts += 1
@@ -258,10 +258,10 @@ class BrowserScraper:
                                             logger.info(f"✅ Successful click #{successful_clicks} on '{text}' button")
 
                                             # Wait for network activity to settle
-                                            await page.wait_for_load_state('networkidle', timeout=15000)
+                                            await page.wait_for_load_state('networkidle', timeout=20000)
 
-                                            # Additional wait for content to load
-                                            await page.wait_for_timeout(5000)
+                                            # Additional wait for content to load (increased for slow loading)
+                                            await page.wait_for_timeout(8000)
 
                                             # Check if button is still visible (might disappear after loading all)
                                             try:

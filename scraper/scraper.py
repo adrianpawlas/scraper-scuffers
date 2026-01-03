@@ -208,7 +208,7 @@ class FashionScraper:
         if not self.browser_scraper:
             self.browser_scraper = BrowserScraper(user_agent=self.user_agent)
 
-        max_products = 1500  # Higher limit for browser scraping
+        max_products = 2000  # Higher limit for browser scraping to capture all products
         products = await self.browser_scraper.scrape_all_products(
             url,
             site_config.get('selectors', {}),
