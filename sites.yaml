@@ -11,15 +11,14 @@ scuffers:
     product_url: "a[href*='/products/']:not([href*='giftcard']):not([href*='gift-card'])"
     title: "h1, .product-title, .title, [class*='title']"
     price: ".price, .product-price, [data-price], [class*='price']"
-    currency: "EUR"  # Default currency
+    sale: ".sale-price, .price--sale, [data-sale-price], .compare-at-price, [class*='sale-price']"
     image_url: "img[src*='cdn'], img[src^='//']"
     sizes: ".size-option, .variant-option, [data-size], .size-selector option, [class*='size']"
     gender: ".gender, .category, .collection-title, h1, .collection-title"  # Try to infer from page content
   field_map:
-    external_id: "url"  # We'll extract from product URL
+    external_id: "url"
     title: "title"
     price: "price"
-    currency: "EUR"
     image_url: "image_url"
     product_url: "url"
     size: "sizes"

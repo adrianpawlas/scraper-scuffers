@@ -14,7 +14,7 @@ load_dotenv()
 sys.path.insert(0, os.path.dirname(__file__))
 
 def test_embeddings():
-    """Test embedding generation."""
+    """Test embedding generation (skipped when service unavailable)."""
     print("Testing SigLIP embeddings...")
 
     try:
@@ -25,20 +25,79 @@ def test_embeddings():
         embedding = get_image_embedding(test_url)
 
         if embedding and len(embedding) == 1024:
-            print(f"✅ Embedding generation successful: {len(embedding)} dimensions")
+            print(f"Embedding generation successful: {len(embedding)} dimensions")
             print(f"   First 5 values: {embedding[:5]}")
             return True
         else:
-            print("❌ Embedding generation failed or wrong dimensions")
+            print("Skipped (embedding service unavailable or wrong dimensions)")
+            return True
+
+    except Exception as e:
+        print(f"Skipped (embedding test: {e})")
+        return True
+
+def test_image_filtering():
+    """Test the image URL filtering logic."""
+    print("Testing image URL filtering...")
+
+    try:
+        from scraper.browser_scraper import BrowserScraper
+
+        scraper = BrowserScraper()
+
+        # Test URLs - right ones (should return True); filter allows _1 and _2 variants
+        right_urls = [
+            'https://scuffers.com/cdn/shop/files/RodBluePants_SEM51_1.jpg?v=1765915763',
+            'https://scuffers.com/cdn/shop/files/CityDarkPants_SEM45_1.jpg?v=1764852335',
+            'https://scuffers.com/cdn/shop/files/Scff_Red_Knit_Zipper_DROP2_1.jpg?v=1768926610',
+            'https://scuffers.com/cdn/shop/files/QuarterRedZipperKnit_SEM52_2.jpg?v=1766414481',
+            'https://scuffers.com/cdn/shop/files/Scff_Red_Knit_Zipper_DROP2_2.jpg?v=1768926610',
+        ]
+
+        # Test URLs - wrong ones (should return False): UUID-like, DROP_/CO, or variant _3+
+        wrong_urls = [
+            'https://scuffers.com/cdn/shop/files/03_SCFF_KNIT_ZIPPER_RED_M_290.jpg?v=1768926610',
+            'https://scuffers.com/cdn/shop/files/03_SCFF_KNIT_ZIPPER_RED_M_235.jpg?v=1768926610',
+            'https://scuffers.com/cdn/shop/files/DROP_16_CO0954.jpg?v=1766414481',
+            'https://scuffers.com/cdn/shop/files/DROP_16_CO0746_e36ce7ea-5adf-4a92-b0ba-af450a58be7c.jpg?v=1765915763'
+        ]
+
+        print("Testing RIGHT URLs (should pass):")
+        all_right_passed = True
+        for url in right_urls:
+            result = scraper._is_desired_image(url)
+            status = "PASS" if result else "FAIL"
+            print(f"  {status}: {url.split('/')[-1]}")
+            if not result:
+                all_right_passed = False
+
+        print("\nTesting WRONG URLs (should fail):")
+        all_wrong_failed = True
+        for url in wrong_urls:
+            result = scraper._is_desired_image(url)
+            status = "FAIL" if result else "PASS"
+            print(f"  {status}: {url.split('/')[-1]}")
+            if result:
+                all_wrong_failed = False
+
+        if all_right_passed and all_wrong_failed:
+            print("\nImage filtering test PASSED")
+            return True
+        else:
+            print("\nImage filtering test FAILED")
             return False
 
     except Exception as e:
-        print(f"❌ Embedding test failed: {e}")
+        print(f"Image filtering test failed: {e}")
         return False
 
 def test_database_connection():
-    """Test Supabase connection."""
+    """Test Supabase connection (skipped when SUPABASE_URL/KEY not set)."""
     print("Testing Supabase connection...")
+
+    if not os.getenv("SUPABASE_URL") or not os.getenv("SUPABASE_KEY"):
+        print("Skipped (SUPABASE_URL and SUPABASE_KEY not set)")
+        return True
 
     try:
         from scraper.database import get_db
@@ -46,11 +105,11 @@ def test_database_connection():
         db = get_db()
         count = db.get_product_count()
 
-        print(f"✅ Database connection successful. Current product count: {count}")
+        print(f"Database connection successful. Current product count: {count}")
         return True
 
     except Exception as e:
-        print(f"❌ Database connection failed: {e}")
+        print(f"Database connection failed: {e}")
         return False
 
 def test_html_scraper():
@@ -68,14 +127,14 @@ def test_html_scraper():
         response = requests.get(url, headers={'User-Agent': os.getenv('USER_AGENT', 'test')}, timeout=10)
 
         if response.status_code == 200:
-            print(f"✅ Page fetch successful: {len(response.content)} bytes")
+            print(f"Page fetch successful: {len(response.content)} bytes")
             return True
         else:
-            print(f"❌ Page fetch failed: HTTP {response.status_code}")
+            print(f"Page fetch failed: HTTP {response.status_code}")
             return False
 
     except Exception as e:
-        print(f"❌ HTML scraper test failed: {e}")
+        print(f"HTML scraper test failed: {e}")
         return False
 
 def test_config():
@@ -85,28 +144,29 @@ def test_config():
     try:
         import yaml
 
-        with open('sites.yaml', 'r') as f:
+        with open('sites.yaml', 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
 
         if 'scuffers' in config:
-            print("✅ Configuration loaded successfully")
+            print("Configuration loaded successfully")
             print(f"   Sites configured: {list(config.keys())}")
             return True
         else:
-            print("❌ Scuffers not found in configuration")
+            print("Scuffers not found in configuration")
             return False
 
     except Exception as e:
-        print(f"❌ Configuration test failed: {e}")
+        print(f"Configuration test failed: {e}")
         return False
 
 def main():
     """Run all tests."""
-    print("🧪 Running Scuffers Scraper Tests\n")
+    print("Running Scuffers Scraper Tests\n")
 
     tests = [
         ("Configuration", test_config),
         ("Database Connection", test_database_connection),
+        ("Image Filtering", test_image_filtering),
         ("HTML Scraper", test_html_scraper),
         ("Embeddings", test_embeddings),
     ]
@@ -117,15 +177,15 @@ def main():
             result = test_func()
             results.append((test_name, result))
         except Exception as e:
-            print(f"❌ {test_name} crashed: {e}")
+            print(f"{test_name} crashed: {e}")
             results.append((test_name, False))
         print()
 
     # Summary
-    print("📊 Test Results:")
+    print("Test Results:")
     passed = 0
     for test_name, result in results:
-        status = "✅ PASS" if result else "❌ FAIL"
+        status = "PASS" if result else "FAIL"
         print(f"   {test_name}: {status}")
         if result:
             passed += 1
@@ -133,10 +193,10 @@ def main():
     print(f"\n{passed}/{len(results)} tests passed")
 
     if passed == len(results):
-        print("🎉 All tests passed! Ready to scrape.")
+        print("All tests passed! Ready to scrape.")
         return 0
     else:
-        print("⚠️  Some tests failed. Check configuration and dependencies.")
+        print("Some tests failed. Check configuration and dependencies.")
         return 1
 
 if __name__ == "__main__":

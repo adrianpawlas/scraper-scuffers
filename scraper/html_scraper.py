@@ -126,7 +126,6 @@ class HTMLScraper:
                 'brand': config.get('brand'),
                 'second_hand': config.get('second_hand', False),
                 'country': config.get('country', 'eu'),
-                'currency': config.get('currency', 'EUR'),
                 'product_url': url
             }
 
@@ -177,10 +176,10 @@ class HTMLScraper:
             if title:
                 product_data['title'] = title
 
-            # Extract price - try multiple approaches
+            # Extract price (multi-currency: "20 USD, 450 CZK, 75 PLN" etc.)
             price = None
 
-            # Try direct price selectors
+            # Try direct price selectors — keep full text so DB can normalize to "20USD,450CZK,75PLN"
             price_selectors = [
                 '.price',
                 '[data-price]',
@@ -199,12 +198,9 @@ class HTMLScraper:
                         'new arrivals', 'best sellers', 'on sale'
                     ]):
                         continue
-
-                    # Look for price pattern in the text
-                    import re
-                    price_match = re.search(r'(\d+[,.]\d+)', price_text)
-                    if price_match:
-                        price = price_match.group(1)
+                    # Prefer full text (handles "20 USD, 450 CZK" or "139,00 EUR")
+                    if re.search(r'\d', price_text):
+                        price = price_text
                         break
 
             # Try to find price in script tags or other elements
@@ -241,6 +237,22 @@ class HTMLScraper:
 
             if price:
                 product_data['price'] = price
+
+            # Extract sale price (same multi-currency format; null if no sale)
+            sale = None
+            sale_selectors = [
+                '.sale-price', '.price--sale', '[data-sale-price]',
+                '.compare-at-price', '.product-price--sale', '[class*="sale"]'
+            ]
+            for selector in sale_selectors:
+                sale_elem = soup.select_one(selector)
+                if sale_elem:
+                    sale_text = sale_elem.get_text(strip=True)
+                    if sale_text and re.search(r'\d', sale_text) and sale_text != price:
+                        sale = sale_text
+                        break
+            if sale:
+                product_data['sale'] = sale
 
             # Extract image URL - prioritize actual product images over placeholders
             img_url = None

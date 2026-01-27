@@ -505,6 +505,61 @@ class BrowserScraper:
 
         return products
 
+    def _is_desired_image(self, img_url: str) -> bool:
+        """
+        Filter image URLs to only include desired ones.
+        Based on analysis of right vs wrong image patterns from Scuffers.
+        """
+        if not img_url:
+            return False
+
+        # Extract filename from URL
+        filename = img_url.split('/')[-1].split('?')[0]  # Remove query params
+
+        # Exclude images with UUIDs (long alphanumeric strings)
+        # Pattern: contains 32+ character hex-like string (UUID format)
+        import re
+        if re.search(r'[a-f0-9]{32,}', filename):
+            return False
+
+        # Exclude images that start with numeric codes like "03_", "DROP_16_", etc.
+        if re.match(r'^\d+_', filename):
+            return False
+
+        # Exclude images that start with "DROP_" or "CO" prefixes
+        if filename.startswith(('DROP_', 'CO')):
+            return False
+
+        # Exclude images that are just numeric codes
+        if re.match(r'^[A-Z]{2,}\d+\.jpg$', filename):
+            return False
+
+        # Include images that have meaningful product names
+        # Should contain actual product descriptors
+        meaningful_patterns = [
+            'pants', 'knit', 'zipper', 'jacket', 'shirt', 'coat', 'dress', 'skirt',
+            'jeans', 'short', 'sweater', 'top', 'boot', 'shoe', 'sneaker', 'hat',
+            'cap', 'bag', 'belt', 'wallet', 'scarf', 'jewelry', 'accessory',
+            'blue', 'red', 'black', 'white', 'green', 'dark', 'light'
+        ]
+
+        # Check if filename contains meaningful product terms
+        filename_lower = filename.lower()
+        has_meaningful_name = any(pattern in filename_lower for pattern in meaningful_patterns)
+
+        # Must have at least 2 meaningful parts (separated by underscores)
+        parts = filename.replace('.jpg', '').split('_')
+        has_multiple_parts = len(parts) >= 2
+
+        # Additional check: exclude images that look like secondary variants
+        # If filename ends with _2, _3, etc., be more restrictive
+        if re.search(r'_\d+\.jpg$', filename) and filename.split('_')[-1].replace('.jpg', '').isdigit():
+            variant_num = int(filename.split('_')[-1].replace('.jpg', ''))
+            if variant_num > 2:  # Only allow _1 and _2
+                return False
+
+        return has_meaningful_name and has_multiple_parts
+
     async def _extract_product_from_container(self, container, page: Page, selectors: Dict[str, str]) -> Optional[Dict[str, Any]]:
         """Extract product data from a single container element."""
         try:
@@ -531,14 +586,22 @@ class BrowserScraper:
                 if title_text:
                     product_data['title'] = title_text.strip()
 
-            # Extract price
+            # Extract price (full text for multi-currency: "20 USD, 450 CZK, 75 PLN")
             price_elem = await container.query_selector(selectors.get('price', '.price, .product-price'))
             if price_elem:
                 price_text = await price_elem.text_content()
                 if price_text:
                     product_data['price'] = price_text.strip()
 
-            # Extract image URL
+            # Extract sale price (same format; only set if product is on sale)
+            sale_selector = selectors.get('sale', '.sale-price, .price--sale, [data-sale-price], .compare-at-price')
+            sale_elem = await container.query_selector(sale_selector)
+            if sale_elem:
+                sale_text = (await sale_elem.text_content() or '').strip()
+                if sale_text and sale_text != product_data.get('price'):
+                    product_data['sale'] = sale_text
+
+            # Extract image URL with filtering
             img_elem = await container.query_selector(selectors.get('image_url', 'img'))
             if img_elem:
                 img_url = await img_elem.get_attribute('src')
@@ -548,7 +611,10 @@ class BrowserScraper:
                     elif img_url.startswith('/'):
                         base_url = page.url.split('/collections')[0]
                         img_url = urljoin(base_url, img_url)
-                    product_data['image_url'] = img_url
+
+                    # Filter out unwanted image URLs
+                    if self._is_desired_image(img_url):
+                        product_data['image_url'] = img_url
 
             # Extract gender and category
             gender, category = await self._determine_category(container, page, selectors, product_url)
@@ -556,6 +622,11 @@ class BrowserScraper:
                 product_data['gender'] = gender
             if category:
                 product_data['category'] = category
+
+            # Skip products without suitable images
+            if 'image_url' not in product_data:
+                logger.debug(f"Skipping product {product_data.get('external_id', 'unknown')} - no suitable image found")
+                return None
 
             return product_data
 

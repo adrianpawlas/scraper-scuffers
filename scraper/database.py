@@ -4,6 +4,7 @@ Uses direct REST API calls to avoid Edge Function requirements.
 """
 
 import os
+import re
 import logging
 import hashlib
 import json
@@ -153,6 +154,7 @@ class SupabaseDB:
             product_id = hashlib.sha256(id_string.encode('utf-8')).hexdigest()
 
             # Build the formatted product
+            # price/sale: text, comma-separated multi-currency (e.g. "20USD,450CZK,75PLN")
             # Using source + product_url as the natural unique key
             formatted = {
                 'id': product_id,  # Required: text primary key
@@ -162,8 +164,8 @@ class SupabaseDB:
                 'title': title,
                 'brand': product.get('brand'),
                 'gender': product.get('gender'),
-                'price': self._parse_price(product.get('price')),
-                'currency': product.get('currency', 'EUR'),
+                'price': self._format_price_text(product.get('price')) or '',  # not null in DB
+                'sale': self._format_price_text(product.get('sale')) if product.get('sale') else None,
                 'size': product.get('size'),
                 'second_hand': product.get('second_hand', False)
             }
@@ -182,8 +184,6 @@ class SupabaseDB:
 
             # Optional metadata
             metadata = {}
-            if 'original_currency' in product:
-                metadata['original_currency'] = product['original_currency']
             if 'merchant_name' in product:
                 metadata['merchant_name'] = product['merchant_name']
             if 'country' in product:
@@ -198,43 +198,45 @@ class SupabaseDB:
             logger.error(f"Failed to format product: {e}")
             return None
 
-    def _parse_price(self, price_str: Optional[str]) -> Optional[float]:
+    def _format_price_text(self, price_input: Any) -> Optional[str]:
         """
-        Parse price string to float.
+        Normalize price to comma-separated multi-currency text (e.g. "20USD,450CZK,75PLN").
 
         Args:
-            price_str: Price as string (e.g., "139,00 EUR", "139.00")
+            price_input: Price as string (e.g. "20 USD, 450 CZK", "139,00 EUR") or list of such strings
 
         Returns:
-            Price as float or None if parsing failed
+            Formatted string like "20USD,450CZK,75PLN" or None if empty/invalid
         """
-        if not price_str:
+        if price_input is None:
             return None
-
-        try:
-            # Remove currency symbols and extra text
-            price_str = str(price_str).strip()
-
-            # Handle European format (139,00) and convert to (139.00)
-            if ',' in price_str and '.' not in price_str:
-                # European format: 139,00
-                price_str = price_str.replace(',', '.')
-            elif ',' in price_str and '.' in price_str:
-                # Mixed format: remove commas if they're thousands separators
-                price_str = price_str.replace(',', '')
-
-            # Extract numeric part
-            import re
-            match = re.search(r'[\d.]+', price_str)
-            if match:
-                return float(match.group())
-            else:
-                logger.warning(f"Could not parse price: {price_str}")
-                return None
-
-        except Exception as e:
-            logger.error(f"Failed to parse price '{price_str}': {e}")
+        if isinstance(price_input, (list, tuple)):
+            parts = []
+            for item in price_input:
+                p = self._format_price_text(item)
+                if p:
+                    # Each item might be "20USD" or "20USD,450CZK" — split and merge
+                    for chunk in p.split(','):
+                        if chunk.strip():
+                            parts.append(chunk.strip())
+            return ','.join(parts) if parts else None
+        text = str(price_input).strip()
+        if not text:
             return None
+        # Match amount + currency: e.g. "20 USD", "450 CZK", "139,00 EUR", "75.50 PLN", "20USD"
+        pattern = re.compile(r'(\d+(?:[.,]\d+)?)\s*([A-Z]{2,3})\b', re.IGNORECASE)
+        pairs = []
+        for m in pattern.finditer(text):
+            amount = m.group(1).replace(',', '.')
+            if '.' in amount and amount.endswith('.00'):
+                amount = amount[:-3]  # "139.00" -> "139" optional; keep as-is for clarity
+            currency = m.group(2).upper()
+            pairs.append(f"{amount}{currency}")
+        if pairs:
+            return ','.join(pairs)
+        # Fallback: treat as single value without currency, e.g. "139" -> keep raw for now
+        logger.debug(f"Could not parse multi-currency from: {price_input!r}")
+        return text
 
     def get_product_count(self, source: Optional[str] = None) -> int:
         """
