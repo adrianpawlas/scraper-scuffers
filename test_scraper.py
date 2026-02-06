@@ -24,7 +24,7 @@ def test_embeddings():
         test_url = 'https://images.unsplash.com/photo-1523381210434-271e8be1f52b?w=400'
         embedding = get_image_embedding(test_url)
 
-        if embedding and len(embedding) == 1024:
+        if embedding and len(embedding) == 768:
             print(f"Embedding generation successful: {len(embedding)} dimensions")
             print(f"   First 5 values: {embedding[:5]}")
             return True

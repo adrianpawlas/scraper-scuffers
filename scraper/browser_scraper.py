@@ -601,20 +601,23 @@ class BrowserScraper:
                 if sale_text and sale_text != product_data.get('price'):
                     product_data['sale'] = sale_text
 
-            # Extract image URL with filtering
-            img_elem = await container.query_selector(selectors.get('image_url', 'img'))
-            if img_elem:
-                img_url = await img_elem.get_attribute('src')
+            # Extract all image URLs from this container (each product gets its own images)
+            img_elems = await container.query_selector_all(selectors.get('image_url', 'img'))
+            product_images = []
+            base_url = page.url.split('/collections')[0] if '/collections' in page.url else page.url.rsplit('/', 1)[0]
+            for img_el in img_elems:
+                img_url = await img_el.get_attribute('src') or await img_el.get_attribute('data-src')
                 if img_url:
                     if img_url.startswith('//'):
                         img_url = 'https:' + img_url
                     elif img_url.startswith('/'):
-                        base_url = page.url.split('/collections')[0]
                         img_url = urljoin(base_url, img_url)
-
-                    # Filter out unwanted image URLs
-                    if self._is_desired_image(img_url):
-                        product_data['image_url'] = img_url
+                    if self._is_desired_image(img_url) and img_url not in product_images:
+                        product_images.append(img_url)
+            if product_images:
+                product_data['image_url'] = product_images[0]
+                if len(product_images) > 1:
+                    product_data['additional_images'] = ','.join(product_images[1:])
 
             # Extract gender and category
             gender, category = await self._determine_category(container, page, selectors, product_url)

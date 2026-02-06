@@ -208,6 +208,45 @@ class SigLIPEmbeddings:
 
         return None
 
+    def get_text_embedding(self, text: str, max_length: int = 64) -> Optional[List[float]]:
+        """
+        Generate text embedding using SigLIP text encoder (same model as images).
+        Used for info_embedding / AI search over product data.
+
+        Args:
+            text: Text to embed (e.g. product title, description, etc.)
+            max_length: Max token length (SigLIP uses 64 by default)
+
+        Returns:
+            List of 768 float values, or None if failed
+        """
+        if self.model is None:
+            self._load_model()
+        if not (text and str(text).strip()):
+            return None
+        try:
+            inputs = self.processor(
+                text=[str(text).strip()],
+                padding="max_length",
+                max_length=max_length,
+                truncation=True,
+                return_tensors="pt",
+            )
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            # Pass only text inputs so model returns text_embeds
+            with torch.no_grad():
+                outputs = self.model.get_text_features(**inputs)
+            if hasattr(outputs, 'pooler_output'):
+                embedding = outputs.pooler_output.squeeze().tolist()
+            else:
+                embedding = outputs[0].squeeze().tolist()
+            if len(embedding) != 768:
+                logger.warning(f"Text embedding dimension {len(embedding)}, expected 768")
+            return embedding
+        except Exception as e:
+            logger.error(f"Failed to generate text embedding: {e}")
+            return None
+
 
 # Global instance for reuse
 _embeddings_instance = None
@@ -247,6 +286,24 @@ def get_batch_embeddings(image_urls: List[str], batch_size: int = 8) -> List[Opt
         _embeddings_instance = SigLIPEmbeddings(model_name)
 
     return _embeddings_instance.get_batch_embeddings(image_urls, batch_size)
+
+
+def get_text_embedding(text: str) -> Optional[List[float]]:
+    """
+    Convenience function to get text embedding (same SigLIP model as images).
+    Used for info_embedding / AI search.
+
+    Args:
+        text: Text to embed
+
+    Returns:
+        List of 768 float values or None if failed
+    """
+    global _embeddings_instance
+    if _embeddings_instance is None:
+        model_name = os.getenv('EMBEDDINGS_MODEL', 'google/siglip-base-patch16-384')
+        _embeddings_instance = SigLIPEmbeddings(model_name)
+    return _embeddings_instance.get_text_embedding(text)
 
 
 if __name__ == "__main__":

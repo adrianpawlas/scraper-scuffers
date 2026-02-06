@@ -83,12 +83,17 @@ class SupabaseDB:
 
             products_to_upsert = list(seen.values())
 
-            # Normalize all products to have the same keys (Supabase requirement)
+            # Only send columns that exist in the products table (avoid sending removed 'embedding')
+            allowed_columns = {
+                'id', 'source', 'product_url', 'affiliate_url', 'image_url', 'brand', 'title',
+                'description', 'category', 'gender', 'metadata', 'size', 'second_hand',
+                'image_embedding', 'info_embedding', 'country', 'tags', 'other', 'price', 'sale',
+                'additional_images',
+            }
+            # Normalize: same keys across all rows, only allowed columns
             all_keys = set()
             for p in products_to_upsert:
-                all_keys.update(p.keys())
-
-            # Ensure every product has all keys (fill missing with None)
+                all_keys.update(k for k in p.keys() if k in allowed_columns)
             normalized_products = []
             for p in products_to_upsert:
                 normalized = {key: p.get(key) for key in all_keys}
@@ -178,9 +183,29 @@ class SupabaseDB:
             if 'category' in product and product['category']:
                 formatted['category'] = product['category']
 
-            # Optional embedding
-            if 'embedding' in product and product['embedding'] is not None:
-                formatted['embedding'] = product['embedding']
+            # Image embedding (main product image)
+            if 'image_embedding' in product and product['image_embedding'] is not None:
+                formatted['image_embedding'] = product['image_embedding']
+
+            # Info embedding (text search / AI search)
+            if 'info_embedding' in product and product['info_embedding'] is not None:
+                formatted['info_embedding'] = product['info_embedding']
+
+            # Additional images (comma-separated URLs)
+            if 'additional_images' in product and product['additional_images']:
+                formatted['additional_images'] = product['additional_images'] if isinstance(product['additional_images'], str) else ','.join(product['additional_images'])
+
+            # Country
+            if 'country' in product and product['country']:
+                formatted['country'] = product['country']
+
+            # Tags (array)
+            if 'tags' in product and product['tags']:
+                formatted['tags'] = product['tags'] if isinstance(product['tags'], list) else [t.strip() for t in str(product['tags']).split(',') if t.strip()]
+
+            # Other
+            if 'other' in product and product['other']:
+                formatted['other'] = product['other']
 
             # Optional metadata
             metadata = {}

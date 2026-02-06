@@ -254,43 +254,15 @@ class HTMLScraper:
             if sale:
                 product_data['sale'] = sale
 
-            # Extract image URL - prioritize actual product images over placeholders
-            img_url = None
+            # Extract ALL product images: scope to product content to avoid shared header/logo
+            # Main image goes to image_url and gets embedded; rest to additional_images (comma-sep)
+            base_url_parsed = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
+            product_image_urls = self._extract_all_product_images(soup, base_url_parsed, selectors)
 
-            # First try to find CDN images that are likely product photos
-            cdn_images = soup.select('img[src*="cdn"], img[src^="//"]')
-            for img in cdn_images:
-                src = img.get('src', '')
-                alt = img.get('alt', '').lower()
-                classes = ' '.join(img.get('class', [])).lower()
-
-                # Skip logos, icons, and placeholder images
-                if any(skip in src.lower() for skip in ['logo', 'icon', 'social', 'flag', 'placeholder']):
-                    continue
-                if any(skip in alt for skip in ['logo', 'icon', 'flag', 'scuffers']):
-                    continue
-                if 'logo' in classes or 'icon' in classes:
-                    continue
-
-                # Look for images that are likely product photos (contain product name or have reasonable size)
-                if any(keyword in src.lower() for keyword in ['jpg', 'jpeg', 'png']) and len(src) > 50:
-                    img_url = src
-                    break
-
-            # Fallback to the selector if we didn't find a good image
-            if not img_url:
-                img_elem = soup.select_one(selectors.get('image_url', 'img[src*="cdn.shopify.com"]'))
-                if img_elem:
-                    img_url = img_elem.get('src')
-
-            if img_url:
-                # Convert relative URLs to absolute
-                if img_url.startswith('//'):
-                    img_url = 'https:' + img_url
-                elif img_url.startswith('/'):
-                    base_url = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
-                    img_url = urljoin(base_url, img_url)
-                product_data['image_url'] = img_url
+            if product_image_urls:
+                product_data['image_url'] = product_image_urls[0]
+                if len(product_image_urls) > 1:
+                    product_data['additional_images'] = ','.join(product_image_urls[1:])
 
             # Extract sizes
             size_elements = soup.select(selectors.get('sizes', '.size-option, [data-size]'))
@@ -315,6 +287,65 @@ class HTMLScraper:
         except Exception as e:
             logger.error(f"Failed to scrape product page {url}: {e}")
             return None
+
+    def _extract_all_product_images(self, soup: BeautifulSoup, base_url: str, selectors: Dict[str, str]) -> List[str]:
+        """
+        Extract all product image URLs from a product page, scoped to product content
+        so we don't pick a shared header/logo. Returns first as main, rest as additional.
+        """
+        seen = set()
+        urls = []
+
+        def normalize_src(src: str) -> Optional[str]:
+            if not src or not src.strip():
+                return None
+            if src.startswith('//'):
+                src = 'https:' + src
+            elif src.startswith('/'):
+                src = urljoin(base_url, src)
+            return src
+
+        def is_product_image(src: str, img_elem) -> bool:
+            src_lower = src.lower()
+            alt = (img_elem.get('alt') or '').lower()
+            classes = ' '.join(img_elem.get('class', [])).lower()
+            if any(skip in src_lower for skip in ['logo', 'icon', 'social', 'flag', 'placeholder']):
+                return False
+            if any(skip in alt for skip in ['logo', 'icon', 'flag', 'scuffers']):
+                return False
+            if 'logo' in classes or 'icon' in classes:
+                return False
+            if not any(ext in src_lower for ext in ['jpg', 'jpeg', 'png', 'webp']):
+                return False
+            if len(src) < 30:
+                return False
+            return True
+
+        # Prefer images inside product-specific containers (fixes same image for all products)
+        product_containers = soup.select(
+            'main [class*="product"] img, main .product-gallery img, main .product-images img, '
+            'main [class*="product-gallery"] img, main [class*="product__media"] img, '
+            '.product [class*="media"] img, .product-gallery img, .product__media img, '
+            '[class*="product-single"] img, [class*="product-media"] img'
+        )
+        if product_containers:
+            for img in product_containers:
+                src = img.get('src') or img.get('data-src') or img.get('data-lazy-src')
+                src = normalize_src(src) if src else None
+                if src and src not in seen and is_product_image(src, img):
+                    seen.add(src)
+                    urls.append(src)
+
+        # Fallback: all CDN/Shopify images on page (still skip logos)
+        if not urls:
+            for img in soup.select('img[src*="cdn"], img[src*="shopify"], img[src^="//"]'):
+                src = img.get('src') or img.get('data-src')
+                src = normalize_src(src) if src else None
+                if src and src not in seen and is_product_image(src, img):
+                    seen.add(src)
+                    urls.append(src)
+
+        return urls
 
     def _extract_product_from_listing(self, container, base_url: str, selectors: Dict[str, str]) -> Optional[Dict[str, Any]]:
         """

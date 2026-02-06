@@ -12,15 +12,30 @@ import os
 try:
     from .html_scraper import HTMLScraper
     from .browser_scraper import BrowserScraper
-    from .embeddings import get_batch_embeddings
+    from .embeddings import get_batch_embeddings, get_text_embedding
     from .database import upsert_products
 except ImportError:
     from html_scraper import HTMLScraper
     from browser_scraper import BrowserScraper
-    from embeddings import get_batch_embeddings
+    from embeddings import get_batch_embeddings, get_text_embedding
     from database import upsert_products
 
 logger = logging.getLogger(__name__)
+
+
+def _build_product_info_text(product: Dict[str, Any]) -> str:
+    """Build a single text string from all product fields for info_embedding / AI search."""
+    parts = []
+    for key in ('title', 'brand', 'description', 'category', 'gender', 'price', 'sale', 'size', 'other'):
+        val = product.get(key)
+        if val is not None and str(val).strip():
+            parts.append(str(val).strip())
+    if product.get('tags'):
+        tags = product['tags'] if isinstance(product['tags'], list) else [t.strip() for t in str(product['tags']).split(',') if t.strip()]
+        if tags:
+            parts.append(' '.join(tags))
+    return ' '.join(parts) if parts else ''
+
 
 class FashionScraper:
     def __init__(self, config_path: str = 'sites.yaml'):
@@ -138,19 +153,29 @@ class FashionScraper:
                             merged_product = dict(listing)  # Start with listing data
                             merged_product.update(product_data)  # Override with detailed data
 
-                            # Generate embedding if image URL is available
+                            # Generate image embedding for main product image
                             image_url = merged_product.get('image_url')
                             if image_url:
-                                logger.debug(f"Generating embedding for {product_url}")
+                                logger.debug(f"Generating image embedding for {product_url}")
                                 try:
-                                    embedding = get_batch_embeddings([image_url])[0]
-                                    if embedding:
-                                        merged_product['embedding'] = embedding
-                                        logger.debug(f"Generated embedding with {len(embedding)} dimensions")
+                                    img_emb = get_batch_embeddings([image_url])[0]
+                                    if img_emb:
+                                        merged_product['image_embedding'] = img_emb
+                                        logger.debug(f"Generated image embedding: {len(img_emb)} dimensions")
                                     else:
-                                        logger.warning(f"Failed to generate embedding for {product_url}")
+                                        logger.warning(f"Failed to generate image embedding for {product_url}")
                                 except Exception as e:
-                                    logger.error(f"Error generating embedding for {product_url}: {e}")
+                                    logger.error(f"Error generating image embedding for {product_url}: {e}")
+
+                            # Generate info embedding (all product text for AI search)
+                            info_text = _build_product_info_text(merged_product)
+                            if info_text:
+                                try:
+                                    info_emb = get_text_embedding(info_text)
+                                    if info_emb:
+                                        merged_product['info_embedding'] = info_emb
+                                except Exception as e:
+                                    logger.warning(f"Info embedding failed for {product_url}: {e}")
 
                             products.append(merged_product)
                         else:
@@ -164,6 +189,21 @@ class FashionScraper:
                                 'merchant_name': site_config.get('merchant_name'),
                                 'country': site_config.get('country', 'eu'),
                             })
+                            if basic_product.get('image_url'):
+                                try:
+                                    emb = get_batch_embeddings([basic_product['image_url']])[0]
+                                    if emb:
+                                        basic_product['image_embedding'] = emb
+                                except Exception:
+                                    pass
+                            info_text = _build_product_info_text(basic_product)
+                            if info_text:
+                                try:
+                                    info_emb = get_text_embedding(info_text)
+                                    if info_emb:
+                                        basic_product['info_embedding'] = info_emb
+                                except Exception:
+                                    pass
                             products.append(basic_product)
 
                         # Log progress
