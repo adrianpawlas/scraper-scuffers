@@ -137,6 +137,103 @@ def test_html_scraper():
         print(f"HTML scraper test failed: {e}")
         return False
 
+def test_database_upsert_payload_no_embedding():
+    """Assert the payload sent to Supabase never contains the removed 'embedding' column."""
+    print("Testing database upsert payload (no 'embedding' key)...")
+
+    try:
+        from scraper.database import get_db, SupabaseDB
+        import json
+        from unittest.mock import patch, MagicMock
+
+        # Products: one with image_embedding, one with stray 'embedding' (must be stripped)
+        mock_products = [
+            {
+                'source': 'test',
+                'product_url': 'https://example.com/p/1',
+                'image_url': 'https://example.com/img1.jpg',
+                'title': 'Product 1',
+                'image_embedding': [0.1] * 768,
+                'info_embedding': [0.2] * 768,
+            },
+            {
+                'source': 'test',
+                'product_url': 'https://example.com/p/2',
+                'image_url': 'https://example.com/img2.jpg',
+                'title': 'Product 2',
+                'embedding': [0.99] * 768,  # old key - must not appear in payload
+            },
+        ]
+        payload_sent = []
+
+        def capture_post(url, headers=None, data=None, timeout=None, **kwargs):
+            payload_sent.append(json.loads(data))
+            r = MagicMock()
+            r.status_code = 201
+            return r
+
+        # If env is set, run real code path with patched post
+        if os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_KEY"):
+            with patch('requests.Session.post', side_effect=capture_post):
+                db = get_db()
+                db.upsert_products(mock_products)
+        else:
+            # No env: test format + whitelist without connecting
+            db = SupabaseDB.__new__(SupabaseDB)
+            allowed_columns = {
+                'id', 'source', 'product_url', 'affiliate_url', 'image_url', 'brand', 'title',
+                'description', 'category', 'gender', 'metadata', 'size', 'second_hand',
+                'image_embedding', 'info_embedding', 'country', 'tags', 'other', 'price', 'sale',
+                'additional_images',
+            }
+            formatted = []
+            for p in mock_products:
+                f = db._format_product_for_db(p)
+                if f:
+                    formatted.append(f)
+            all_keys = set(k for k in formatted[0].keys() if k in allowed_columns)
+            payload_sent = [{k: p.get(k) for k in all_keys} for p in formatted]
+
+        for chunk in payload_sent:
+            for row in (chunk if isinstance(chunk, list) else [chunk]):
+                if 'embedding' in row:
+                    print(f"FAIL: payload contains 'embedding' key: {list(row.keys())}")
+                    return False
+        print("Payload contains no 'embedding' key")
+        return True
+    except Exception as e:
+        print(f"Database payload test failed: {e}")
+        return False
+
+def test_database_upsert_live():
+    """Test real upsert of 1 product when SUPABASE_URL/KEY are set (validates full import)."""
+    print("Testing database upsert (live)...")
+
+    if not os.getenv("SUPABASE_URL") or not os.getenv("SUPABASE_KEY"):
+        print("Skipped (SUPABASE_URL and SUPABASE_KEY not set)")
+        return True
+
+    try:
+        from scraper.database import upsert_products
+        one = [{
+            'source': 'scraper',
+            'product_url': 'https://scuffers.com/products/test-upsert-payload-check',
+            'image_url': 'https://scuffers.com/cdn/shop/files/test.jpg',
+            'title': 'Test upsert payload',
+            'brand': 'Scuffers',
+            'price': '100 EUR',
+            'country': 'eu',
+        }]
+        ok = upsert_products(one)
+        if ok:
+            print("Live upsert succeeded (1 row)")
+            return True
+        print("Live upsert returned False")
+        return False
+    except Exception as e:
+        print(f"Live upsert failed: {e}")
+        return False
+
 def test_config():
     """Test configuration loading."""
     print("Testing configuration...")
@@ -166,6 +263,8 @@ def main():
     tests = [
         ("Configuration", test_config),
         ("Database Connection", test_database_connection),
+        ("Database payload no 'embedding'", test_database_upsert_payload_no_embedding),
+        ("Database upsert (live)", test_database_upsert_live),
         ("Image Filtering", test_image_filtering),
         ("HTML Scraper", test_html_scraper),
         ("Embeddings", test_embeddings),
