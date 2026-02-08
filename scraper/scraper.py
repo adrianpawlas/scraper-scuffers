@@ -24,9 +24,13 @@ logger = logging.getLogger(__name__)
 
 
 def _build_product_info_text(product: Dict[str, Any]) -> str:
-    """Build a single text string from all product fields for info_embedding / AI search."""
+    """
+    Build a single text string from product fields for info_embedding / AI search.
+    Fields included: title, brand, description, category, gender, price, sale, size, other,
+    tags, merchant_name, metadata.
+    """
     parts = []
-    for key in ('title', 'brand', 'description', 'category', 'gender', 'price', 'sale', 'size', 'other'):
+    for key in ('title', 'brand', 'description', 'category', 'gender', 'price', 'sale', 'size', 'other', 'merchant_name'):
         val = product.get(key)
         if val is not None and str(val).strip():
             parts.append(str(val).strip())
@@ -34,6 +38,23 @@ def _build_product_info_text(product: Dict[str, Any]) -> str:
         tags = product['tags'] if isinstance(product['tags'], list) else [t.strip() for t in str(product['tags']).split(',') if t.strip()]
         if tags:
             parts.append(' '.join(tags))
+    # Include metadata column content (e.g. merchant_name, country from JSON)
+    meta = product.get('metadata')
+    if meta is not None:
+        if isinstance(meta, dict):
+            parts.append(' '.join(f"{k}: {v}" for k, v in meta.items() if v))
+        elif isinstance(meta, str) and meta.strip():
+            try:
+                import json
+                obj = json.loads(meta)
+                if isinstance(obj, dict):
+                    parts.append(' '.join(f"{k}: {v}" for k, v in obj.items() if v))
+                else:
+                    parts.append(meta.strip())
+            except (TypeError, ValueError):
+                parts.append(meta.strip())
+    if product.get('country'):
+        parts.append(f"country: {product['country']}")
     return ' '.join(parts) if parts else ''
 
 

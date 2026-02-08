@@ -276,10 +276,32 @@ class HTMLScraper:
             if gender:
                 product_data['gender'] = gender
 
-            # Extract description
-            desc_elem = soup.select_one('.product-description, .description, [data-description]')
+            # Extract description first (used below for category inference)
+            desc_elem = soup.select_one(
+                '.metafield-rich_text_field .rte, .metafield-rich_text_field p, '
+                '.metafield-rich_text_field, .product-description, .description, [data-description]'
+            )
             if desc_elem:
-                product_data['description'] = desc_elem.get_text(strip=True)
+                product_data['description'] = desc_elem.get_text(separator=' ', strip=True)
+
+            # Infer category from title/description when not from URL or page
+            if not product_data.get('category'):
+                try:
+                    from .category import infer_category_from_text
+                    inferred = infer_category_from_text(
+                        product_data.get('title'),
+                        product_data.get('description'),
+                    )
+                    if inferred:
+                        product_data['category'] = inferred
+                except ImportError:
+                    from category import infer_category_from_text
+                    inferred = infer_category_from_text(
+                        product_data.get('title'),
+                        product_data.get('description'),
+                    )
+                    if inferred:
+                        product_data['category'] = inferred
 
             logger.debug(f"Extracted product data: {product_data}")
             return product_data

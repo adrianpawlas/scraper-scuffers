@@ -8,6 +8,7 @@ import logging
 from typing import List, Dict, Any, Optional
 from urllib.parse import urljoin
 
+import re
 from playwright.async_api import async_playwright, Browser, Page, Playwright
 
 logger = logging.getLogger(__name__)
@@ -61,10 +62,11 @@ class BrowserScraper:
             products = []
             previous_count = 0
             no_change_count = 0
-            max_no_change = 50  # Allow more attempts since we need to load many products (increased from 15)
+            max_no_change = 50
             load_attempts = 0
             successful_clicks = 0
-            max_load_attempts = 200  # Allow up to 200 attempts for maximum coverage (increased from 100)
+            max_load_attempts = 250
+            min_products_target = 1000  # Keep trying until we have at least this many or nothing more loads
 
             while len(products) < max_products and load_attempts < max_load_attempts:
                 load_attempts += 1
@@ -78,206 +80,138 @@ class BrowserScraper:
                 # Handle any cookie overlays that might have appeared
                 await self._handle_cookie_consent(page)
 
-                # Try multiple selectors for the Load More button
+                # Try multiple selectors for the Load More button (Scuffers uses "Cargar más")
                 button_clicked = False
-                button_selectors = [
-                    '#load-more',  # Specific ID from HTML
-                    'button[data-next-url]',  # Button with pagination data
-                    'button:has-text("Load More")',
-                    'button:has-text("LOAD MORE")',
-                    'button:has-text("Show more")',
-                    'button:has-text("SHOW MORE")',
-                    'button:has-text("Cargar más")',  # Spanish
-                    'button:has-text("CARGAR MÁS")',
-                    'button:has-text("Load more")',  # Lowercase variations
-                    'button:has-text("Show more")',
-                    'button.button:has-text("Load More")',
-                    'button.button:has-text("LOAD MORE")',
-                    'button.button:has-text("Show more")',
-                    'button.button:has-text("SHOW MORE")',
-                    'button.button:has-text("Cargar más")',
-                    'button.button:has-text("CARGAR MÁS")',
-                    'button[data-load-more]',
-                    '[class*="load-more"]',
-                    'button:contains("Load More")',
-                    'button:contains("LOAD MORE")',
-                    'button:contains("Show more")',
-                    'button:contains("SHOW MORE")',
-                    'button:contains("Cargar más")',
-                    'button:contains("CARGAR MÁS")',
-                    'button:contains("Charger plus")',  # French
-                    'button:contains("CHARGER PLUS")',
-                    'button:contains("Mehr laden")',  # German
-                    'button:contains("MEHR LADEN")',
-                    'button:contains("Carica altro")',  # Italian
-                    'button:contains("CARICA ALTRO")',
-                    'button',
-                    'a:has-text("Load More")',
-                    'a:has-text("LOAD MORE")',
-                    'a:has-text("Show more")',
-                    'a:has-text("SHOW MORE")',
-                    'a:has-text("Cargar más")',
-                    'a:has-text("CARGAR MÁS")'
-                ]
+                # First try Playwright's getByText (handles "Cargar más" reliably)
+                try:
+                    load_more = page.get_by_role('button', name=re.compile(r'cargar\s*m[aá]s|load\s*more|show\s*more', re.I))
+                    if await load_more.count() > 0:
+                        await load_more.first().scroll_into_view_if_needed()
+                        await page.wait_for_timeout(500)
+                        await load_more.first().click(timeout=10000, force=True)
+                        button_clicked = True
+                        successful_clicks += 1
+                        await page.wait_for_load_state('networkidle', timeout=20000)
+                        await page.wait_for_timeout(5000)
+                except Exception as e:
+                    logger.debug(f"getByRole Load more click: {e}")
+                if not button_clicked:
+                    button_selectors = [
+                        'button:has-text("Cargar más")',
+                        'button:has-text("CARGAR MÁS")',
+                        '[role="button"]:has-text("Cargar más")',
+                        'a:has-text("Cargar más")',
+                        '#load-more',
+                        'button[data-next-url]',
+                        'button:has-text("Load More")',
+                        'button:has-text("LOAD MORE")',
+                        'button:has-text("Show more")',
+                        'button:has-text("SHOW MORE")',
+                        'button:has-text("Load more")',
+                        'button.button:has-text("Cargar más")',
+                        'button.button:has-text("CARGAR MÁS")',
+                        'button[data-load-more]',
+                        '[class*="load-more"]',
+                        'button:contains("Cargar más")',
+                        'button:contains("Load More")',
+                        'button:contains("Show more")',
+                        'a:has-text("Cargar más")',
+                        'a:has-text("Load More")',
+                    ]
+                    # Log candidates
+                    clickable_elements = await page.query_selector_all('button, a, [role="button"], div[onclick], span[onclick]')
+                    load_more_candidates = []
+                    load_more_keywords = [
+                        'load', 'more', 'show', 'cargar', 'charger', 'laden', 'carica',
+                        'más', 'plus', 'altro', 'mehr'
+                    ]
+                    for elem in clickable_elements:
+                        try:
+                            text = await elem.text_content()
+                            if text and any(keyword in text.lower() for keyword in load_more_keywords):
+                                load_more_candidates.append(elem)
+                        except:
+                            pass
+                    logger.info(f"Found {len(load_more_candidates)} elements with load/more/show in text")
+                    for i, elem in enumerate(load_more_candidates[:10]):
+                        try:
+                            tag = await elem.evaluate("el => el.tagName")
+                            text = await elem.text_content()
+                            visible = await elem.is_visible()
+                            logger.info(f"  Candidate {i+1}: <{tag}> '{ (text or '').strip()}' (visible: {visible})")
+                        except Exception as e:
+                            logger.debug(f"Error checking candidate {i}: {e}")
 
-                # Log all clickable elements containing load/more/show keywords in multiple languages
-                clickable_elements = await page.query_selector_all('button, a, [role="button"], div[onclick], span[onclick]')
-                load_more_candidates = []
+                    for selector in button_selectors:
+                        try:
+                            buttons = await page.query_selector_all(selector)
+                            for button in buttons:
+                                try:
+                                    text = await button.text_content()
+                                    text = text.strip().lower() if text else ""
 
-                # Keywords in multiple languages
-                load_more_keywords = [
-                    'load', 'more', 'show', 'cargar', 'charger', 'laden', 'carica',  # English, Spanish, French, German, Italian
-                    'más', 'plus', 'altro', 'mehr'  # Additional words
-                ]
+                                    # Prioritize "load" buttons over "show" buttons, and include Spanish
+                                    is_load_button = any(phrase in text for phrase in [
+                                        'load more', 'cargar más', 'charger plus', 'mehr laden', 'carica altro'
+                                    ])
+                                    is_show_button = 'show more' in text and not is_load_button
 
-                for elem in clickable_elements:
-                    try:
-                        text = await elem.text_content()
-                        if text and any(keyword in text.lower() for keyword in load_more_keywords):
-                            load_more_candidates.append(elem)
-                    except:
-                        pass
-
-                logger.info(f"Found {len(load_more_candidates)} elements with 'load', 'more', or 'show' in text:")
-                for i, elem in enumerate(load_more_candidates):
-                    try:
-                        tag = await elem.evaluate("el => el.tagName")
-                        text = await elem.text_content()
-                        visible = await elem.is_visible()
-                        logger.info(f"  Candidate {i+1}: <{tag}> '{text.strip()}' (visible: {visible})")
-                    except Exception as e:
-                        logger.debug(f"Error checking candidate {i}: {e}")
-
-                for selector in button_selectors:
-                    try:
-                        buttons = await page.query_selector_all(selector)
-                        for button in buttons:
-                            try:
-                                text = await button.text_content()
-                                text = text.strip().lower() if text else ""
-
-                                # Prioritize "load" buttons over "show" buttons, and include Spanish
-                                is_load_button = any(phrase in text for phrase in [
-                                    'load more', 'cargar más', 'charger plus', 'mehr laden', 'carica altro'
-                                ])
-                                is_show_button = 'show more' in text and not is_load_button
-
-                                if is_load_button or is_show_button:
-                                    # First, try to scroll the button into view
-                                    try:
-                                        await button.scroll_into_view_if_needed()
-                                        await page.wait_for_timeout(1000)  # Wait for scroll to complete
-                                        logger.info("Scrolled button into view")
-                                    except Exception as e:
-                                        logger.warning(f"Failed to scroll button into view: {e}")
-
-                                    is_visible = await button.is_visible()
-                                    is_disabled = await button.get_attribute('disabled')
-                                    is_disabled = is_disabled is not None
-                                    next_url = await button.get_attribute('data-next-url')
-
-                                    logger.info(f"Found potential button: '{text}' (visible: {is_visible}, disabled: {is_disabled}, next-url: {next_url})")
-
-                                    # Stop if button is disabled or has no next URL (indicates no more content)
-                                    if is_disabled:
-                                        logger.info("Button is disabled - no more content to load")
-                                        button_clicked = True  # Set to true to break out of loop
-                                        break
-                                    elif next_url == "" or next_url is None:
-                                        logger.info("Button has no next URL - likely no more content to load")
-                                        # Still try clicking once to be sure, but don't count as successful
-                                        pass
-
-                                    # Try clicking even if not visible initially
-                                    if not is_disabled:
-                                        logger.info(f"Attempt {load_attempts}: Clicking {text} button...")
-
-                                        # Handle any overlays before clicking
-                                        await self._handle_cookie_consent(page)
-
-                                        # Try multiple click methods
-                                        click_success = False
+                                    if is_load_button or is_show_button:
+                                        # First, try to scroll the button into view
                                         try:
-                                            # Method 1: Direct click with force
-                                            await button.click(timeout=10000, force=True)  # Force click ignores overlays
-                                            logger.info("Used direct click (force)")
-                                            click_success = True
+                                            await button.scroll_into_view_if_needed()
+                                            await page.wait_for_timeout(1000)
+                                            logger.info("Scrolled button into view")
                                         except Exception as e:
-                                            logger.warning(f"Direct click failed: {e}")
-                                            try:
-                                                # Method 2: JavaScript click with overlay removal
-                                                click_script = """
-                                                (el) => {
-                                                    // Remove all potential overlays
-                                                    const overlaySelectors = [
-                                                        // Cookie overlays
-                                                        '.cky-overlay', '.cky-consent-container', '[class*="cky-consent"]',
-                                                        '.cookie-banner', '.gdpr-banner', '#cookie-banner',
+                                            logger.warning(f"Failed to scroll button into view: {e}")
 
-                                                        // General overlays
-                                                        '.modal', '.popup', '.overlay', '.lightbox',
+                                        is_visible = await button.is_visible()
+                                        is_disabled = await button.get_attribute('disabled')
+                                        is_disabled = is_disabled is not None
+                                        next_url = await button.get_attribute('data-next-url')
+                                        logger.info(f"Found potential button: '{text}' (visible: {is_visible}, disabled: {is_disabled}, next-url: {next_url})")
 
-                                                        // Specific popups
-                                                        '.newsletter-popup', '.discount-popup', '.promo-popup', '.sale-popup',
-                                                        '.announcement-bar', '.notification-bar', '.alert-bar',
-
-                                                        // Sale/discount specific
-                                                        '[class*="sale-banner"]', '[id*="sale-popup"]', '[class*="offer-popup"]',
-                                                        '.exit-popup', '.welcome-popup', '.subscription-popup'
-                                                    ];
-
-                                                    overlaySelectors.forEach(selector => {
-                                                        const elements = document.querySelectorAll(selector);
-                                                        elements.forEach(el => {
-                                                            el.style.display = 'none';
-                                                            el.remove();
-                                                        });
-                                                    });
-
-                                                    // Click the element
-                                                    el.scrollIntoView();
-                                                    el.click();
-                                                    return true;
-                                                }
-                                                """
-                                                await button.evaluate(click_script)
-                                                logger.info("Used JavaScript click with overlay removal")
-                                                click_success = True
-                                            except Exception as e2:
-                                                logger.warning(f"JavaScript click failed: {e2}")
-                                                try:
-                                                    # Method 3: Dispatch click event
-                                                    await button.dispatch_event('click')
-                                                    logger.info("Used dispatch click event")
-                                                    click_success = True
-                                                except Exception as e3:
-                                                    logger.error(f"All click methods failed: {e3}")
-
-                                        if click_success:
-                                            successful_clicks += 1
-                                            logger.info(f"✅ Successful click #{successful_clicks} on '{text}' button")
-
-                                            # Wait for network activity to settle
-                                            await page.wait_for_load_state('networkidle', timeout=20000)
-
-                                            # Additional wait for content to load (increased for slow loading)
-                                            await page.wait_for_timeout(8000)
-
-                                            # Check if button is still visible (might disappear after loading all)
-                                            try:
-                                                still_visible = await button.is_visible()
-                                                logger.info(f"Button still visible after click: {still_visible}")
-                                            except:
-                                                logger.info("Button no longer exists after click")
-
+                                        if is_disabled:
+                                            logger.info("Button is disabled - no more content to load")
                                             button_clicked = True
                                             break
-                            except Exception as e:
-                                logger.debug(f"Error processing button: {e}")
-                        if button_clicked:
-                            break
-                    except Exception as e:
-                        logger.debug(f"Error with selector {selector}: {e}")
+                                        elif next_url == "" or next_url is None:
+                                            logger.info("Button has no next URL - likely no more content to load")
+
+                                        if not is_disabled:
+                                            logger.info(f"Attempt {load_attempts}: Clicking {text} button...")
+                                            await self._handle_cookie_consent(page)
+                                            click_success = False
+                                            try:
+                                                await button.click(timeout=10000, force=True)
+                                                logger.info("Used direct click (force)")
+                                                click_success = True
+                                            except Exception as e:
+                                                logger.warning(f"Direct click failed: {e}")
+                                                try:
+                                                    await button.evaluate("el => { el.scrollIntoView(); el.click(); }")
+                                                    click_success = True
+                                                except Exception as e2:
+                                                    logger.warning(f"JavaScript click failed: {e2}")
+                                                    try:
+                                                        await button.dispatch_event('click')
+                                                        click_success = True
+                                                    except Exception as e3:
+                                                        logger.error(f"All click methods failed: {e3}")
+
+                                            if click_success:
+                                                successful_clicks += 1
+                                                logger.info(f"✅ Successful click #{successful_clicks} on '{text}' button")
+                                                await page.wait_for_load_state('networkidle', timeout=20000)
+                                                await page.wait_for_timeout(8000)
+                                                button_clicked = True
+                                                break
+                                except Exception as e:
+                                    logger.debug(f"Error processing button: {e}")
+                            if button_clicked:
+                                break
+                        except Exception as e:
+                            logger.debug(f"Error with selector {selector}: {e}")
 
                 if not button_clicked:
                     logger.info(f"Attempt {load_attempts}: No clickable Load More button found")
@@ -307,8 +241,12 @@ class BrowserScraper:
                     logger.info(f"No new products found (attempt {no_change_count}/{max_no_change})")
 
                     if no_change_count >= max_no_change:
-                        logger.info("Stopping - no more products loading after multiple attempts")
-                        break
+                        if len(products) >= min_products_target:
+                            logger.info("Stopping - no more products loading after multiple attempts")
+                            break
+                        # Below target: reset and keep trying (button might appear later)
+                        logger.info(f"Only {len(products)} products so far (target min {min_products_target}); resetting and trying again")
+                        no_change_count = 0
 
                 # Safety check to avoid infinite loops
                 if len(products) >= max_products:
@@ -830,16 +768,22 @@ class BrowserScraper:
                 elif any(term in page_url for term in ['/clothing', '/tops', '/bottoms', '/dresses', '/jackets']):
                     category_type = 'clothing'
 
-            # Determine final category
-            final_category = None
-            if category_type and category_type != 'clothing':  # Don't save 'clothing' as it's the default
-                final_category = category_type
-            elif not gender:
-                # If no gender detected and no specific category, mark as 'other'
-                final_category = 'other'
+            # Infer from title when still no category (e.g. on /collections/all)
+            if not category_type:
+                title_elem = await container.query_selector(selectors.get('title', 'h1, .product-title, .title'))
+                if title_elem:
+                    title_text = (await title_elem.text_content() or '').strip()
+                    if title_text:
+                        try:
+                            from .category import infer_category_from_text
+                        except ImportError:
+                            from category import infer_category_from_text
+                        category_type = infer_category_from_text(title_text)
 
+            # Determine final category (keep any detected or inferred; only use 'other' as last resort)
+            final_category = category_type if category_type else 'other'
             return gender, final_category
 
         except Exception as e:
             logger.debug(f"Error determining category for {product_url}: {e}")
-            return None
+            return None, None
