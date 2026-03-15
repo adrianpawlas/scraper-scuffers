@@ -2,17 +2,21 @@ name: Scuffers Scraper
 
 on:
   schedule:
-    # Run daily at 2 AM UTC
-    - cron: '0 2 * * *'
+    # Run daily at midnight UTC
+    - cron: '0 0 * * *'
   workflow_dispatch:
     # Allow manual triggering
     inputs:
-      sites:
-        description: 'Sites to scrape (comma-separated, or "all")'
+      test_mode:
+        description: 'Run in test mode (3 products only)'
         required: false
-        default: 'all'
-      limit:
-        description: 'Limit products per site (optional)'
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      max_products:
+        description: 'Maximum number of products to scrape (optional)'
         required: false
         type: number
 
@@ -26,7 +30,7 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
@@ -36,7 +40,7 @@ jobs:
         sudo apt-get install -y libglib2.0-0 libsm6 libxext6 libxrender-dev libgomp1
 
     - name: Cache pip dependencies
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: ~/.cache/pip
         key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
@@ -49,38 +53,32 @@ jobs:
         pip install torch --index-url https://download.pytorch.org/whl/cpu
         pip install -r requirements.txt
 
-    - name: Install Playwright browsers
-      run: |
-        python -m playwright install chromium
-
     - name: Run scraper
       env:
         SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
         SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        USER_AGENT: ${{ secrets.USER_AGENT }}
-        EMBEDDINGS_MODEL: ${{ secrets.EMBEDDINGS_MODEL }}
       run: |
-        # Get inputs from workflow_dispatch or use defaults
-        SITES="${{ github.event.inputs.sites }}"
-        LIMIT="${{ github.event.inputs.limit }}"
-
-        if [ -z "$SITES" ]; then
-          SITES="all"
+        # Determine test mode
+        TEST_MODE="${{ github.event.inputs.test_mode }}"
+        MAX_PRODS="${{ github.event.inputs.max_products }}"
+        
+        if [ "$TEST_MODE" = "true" ]; then
+          echo "Running in TEST mode..."
+          python main.py --test
+        elif [ -n "$MAX_PRODS" ]; then
+          echo "Running with max products: $MAX_PRODS"
+          python main.py --max $MAX_PRODS
+        else
+          echo "Running full scrape..."
+          python main.py
         fi
 
-        # Convert comma-separated sites to space-separated
-        SITES=$(echo $SITES | tr ',' ' ')
-
-        CMD="python -m scraper.cli --sites $SITES --sync"
-
-        if [ -n "$LIMIT" ]; then
-          CMD="$CMD --limit $LIMIT"
-        fi
-
-        echo "Running: $CMD"
-        eval $CMD
-
-    - name: Notify on failure
-      if: failure()
+    - name: Report status
+      if: always()
       run: |
-        echo "Scraper failed. Check logs for details."
+        if [ "${{ job.status }}" = "success" ]; then
+          echo "✅ Scraper completed successfully"
+        else
+          echo "❌ Scraper failed. Check logs for details."
+          exit 1
+        fi
