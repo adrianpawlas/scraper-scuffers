@@ -20,8 +20,8 @@ class SupabaseREST:
     Uses direct REST API calls instead of the official client to avoid Edge Function requirements.
     """
     def __init__(self, url: str = None, key: str = None):
-        self.base_url = (url or os.getenv('SUPABASE_URL', '')).rstrip("/")
-        self.key = key or os.getenv('SUPABASE_KEY', '')
+        self.base_url = (url or os.getenv('SUPABASE_URL', '')).strip().rstrip("/")
+        self.key = (key or os.getenv('SUPABASE_KEY', '')).strip()
 
         if not self.base_url or not self.key:
             raise ValueError("SUPABASE_URL and SUPABASE_KEY environment variables are required")
