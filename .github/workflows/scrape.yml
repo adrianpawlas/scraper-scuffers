@@ -2,8 +2,8 @@ name: Scuffers Scraper
 
 on:
   schedule:
-    # Run daily at midnight UTC
-    - cron: '0 0 * * *'
+    # Run daily at 12pm UTC
+    - cron: '0 12 * * *'
   workflow_dispatch:
     # Allow manual triggering
     inputs:
