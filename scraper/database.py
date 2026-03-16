@@ -20,8 +20,10 @@ class SupabaseREST:
     Uses direct REST API calls instead of the official client to avoid Edge Function requirements.
     """
     def __init__(self, url: str = None, key: str = None):
-        self.base_url = (url or os.getenv('SUPABASE_URL', '')).strip().rstrip("/")
-        self.key = (key or os.getenv('SUPABASE_KEY', '')).strip()
+        env_url = os.getenv('SUPABASE_URL', '') or ''
+        env_key = os.getenv('SUPABASE_KEY', '') or ''
+        self.base_url = (url or env_url).strip().rstrip("/")
+        self.key = (key or env_key).strip()
 
         if not self.base_url or not self.key:
             raise ValueError("SUPABASE_URL and SUPABASE_KEY environment variables are required")
@@ -312,6 +314,129 @@ class SupabaseDB:
         except Exception as e:
             logger.error(f"Failed to get recent products: {e}")
             return []
+
+    def get_products_by_source(self, source: str) -> Dict[str, Dict]:
+        """
+        Get all products for a source, indexed by product_url.
+        
+        Args:
+            source: Source name
+            
+        Returns:
+            Dictionary keyed by product_url
+        """
+        try:
+            url = f"{self.rest_client.base_url}/rest/v1/products"
+            params = {
+                "source": f"eq.{source}",
+                "select": "*"
+            }
+            resp = self.rest_client.session.get(url, params=params, timeout=60)
+            resp.raise_for_status()
+            products = resp.json()
+            
+            return {p.get("product_url"): p for p in products if p.get("product_url")}
+            
+        except Exception as e:
+            logger.error(f"Failed to get products by source: {e}")
+            return {}
+
+    def upsert_products_batch(self, products: List[Dict[str, Any]]) -> bool:
+        """
+        Upsert products in batch (50 at a time).
+        
+        Args:
+            products: List of product dictionaries
+            
+        Returns:
+            True if successful
+        """
+        if not products:
+            return True
+        
+        formatted_products = []
+        for product in products:
+            formatted = self._format_product_for_db(product)
+            if formatted:
+                formatted["updated_at"] = datetime.utcnow().isoformat() + "Z"
+                formatted_products.append(formatted)
+        
+        if not formatted_products:
+            return False
+        
+        allowed_columns = {
+            'id', 'source', 'product_url', 'affiliate_url', 'image_url', 'brand', 'title',
+            'description', 'category', 'gender', 'metadata', 'size', 'second_hand',
+            'image_embedding', 'info_embedding', 'country', 'tags', 'other', 'price', 'sale',
+            'additional_images', 'updated_at', 'last_seen_run'
+        }
+        
+        all_keys = set()
+        for p in formatted_products:
+            all_keys.update(k for k in p.keys() if k in allowed_columns)
+        
+        normalized = []
+        for p in formatted_products:
+            normalized.append({key: p.get(key) for key in all_keys})
+        
+        endpoint = f"{self.rest_client.base_url}/rest/v1/products"
+        headers = {
+            "Prefer": "resolution=merge-duplicates,return=minimal",
+        }
+        
+        chunk_size = 50
+        success = True
+        
+        for i in range(0, len(normalized), chunk_size):
+            chunk = normalized[i:i + chunk_size]
+            try:
+                resp = self.rest_client.session.post(
+                    endpoint,
+                    headers=headers,
+                    data=json.dumps(chunk),
+                    timeout=60
+                )
+                if resp.status_code not in (200, 201, 204):
+                    logger.error(f"Batch upsert failed: {resp.status_code} {resp.text}")
+                    success = False
+            except Exception as e:
+                logger.error(f"Batch upsert error: {e}")
+                success = False
+        
+        return success
+
+    def delete_products(self, products: List[Dict[str, Any]]) -> int:
+        """
+        Delete products from database.
+        
+        Args:
+            products: List of product dictionaries with product_url
+            
+        Returns:
+            Number of deleted products
+        """
+        if not products:
+            return 0
+        
+        deleted = 0
+        endpoint = f"{self.rest_client.base_url}/rest/v1/products"
+        
+        for product in products:
+            product_url = product.get("product_url")
+            source = product.get("source")
+            if not product_url or not source:
+                continue
+            
+            try:
+                # Delete by composite key
+                url = f"{endpoint}?source=eq.{source}&product_url=eq.{product_url}"
+                resp = self.rest_client.session.delete(url, timeout=30)
+                if resp.status_code in (200, 201, 204):
+                    deleted += 1
+            except Exception as e:
+                logger.warning(f"Failed to delete product {product_url}: {e}")
+        
+        return deleted
 
 
 # Global instance
