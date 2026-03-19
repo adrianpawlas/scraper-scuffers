@@ -358,7 +358,6 @@ class SupabaseDB:
         for product in products:
             formatted = self._format_product_for_db(product)
             if formatted:
-                formatted["updated_at"] = datetime.utcnow().isoformat() + "Z"
                 formatted_products.append(formatted)
         
         if not formatted_products:
@@ -368,7 +367,7 @@ class SupabaseDB:
             'id', 'source', 'product_url', 'affiliate_url', 'image_url', 'brand', 'title',
             'description', 'category', 'gender', 'metadata', 'size', 'second_hand',
             'image_embedding', 'info_embedding', 'country', 'tags', 'other', 'price', 'sale',
-            'additional_images', 'updated_at', 'last_seen_run'
+            'additional_images'
         }
         
         all_keys = set()
