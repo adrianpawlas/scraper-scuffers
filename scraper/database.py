@@ -185,6 +185,19 @@ class SupabaseDB:
             if 'category' in product and product['category']:
                 formatted['category'] = product['category']
 
+            # Full metadata JSON (from product_scraper)
+            if 'metadata' in product and product['metadata']:
+                formatted['metadata'] = product['metadata']
+            else:
+                # Build minimal metadata if not provided
+                metadata = {}
+                if product.get('merchant_name'):
+                    metadata['merchant_name'] = product['merchant_name']
+                if product.get('country'):
+                    metadata['country'] = product['country']
+                if metadata:
+                    formatted['metadata'] = json.dumps(metadata)
+
             # Image embedding (main product image)
             if 'image_embedding' in product and product['image_embedding'] is not None:
                 formatted['image_embedding'] = product['image_embedding']
@@ -216,7 +229,6 @@ class SupabaseDB:
             if 'country' in product:
                 metadata['country'] = product['country']
             if metadata:
-                import json
                 formatted['metadata'] = json.dumps(metadata)
 
             return formatted
