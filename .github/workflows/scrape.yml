@@ -2,8 +2,11 @@ name: Scuffers Scraper
 
 on:
   schedule:
-    # Run daily at 12pm UTC
-    - cron: '0 12 * * *'
+    # Schedule: Mon 6am, Wed 6am, Sat 6am UTC
+    # Mon=1, Wed=3, Sat=6
+    - cron: '0 6 * * 1'
+    - cron: '0 6 * * 3'
+    - cron: '0 6 * * 6'
   workflow_dispatch:
     # Allow manual triggering
     inputs:
